@@ -20,6 +20,7 @@ from .crossline_qc import CrosslineResult, run_crossline_qc
 from .file_qc import FileQcResult, run_file_qc
 from .motion_qc import MotionQcResult, run_motion_qc
 from .offset_qc import OffsetQcResult, run_offset_qc
+from .preprocess_validator import PreProcessResult, validate_preprocess
 from .report import generate_excel_report, generate_word_report, print_terminal_report
 from .surface_builder import SurfaceResult, build_surfaces_from_gsf
 from .svp_qc import SvpQcResult, run_svp_qc
@@ -30,6 +31,7 @@ from .vessel_qc import VesselQcResult, run_vessel_qc
 class FullQcResult:
     """Aggregated results from all QC modules."""
 
+    preprocess: PreProcessResult | None = None
     file_qc: FileQcResult | None = None
     vessel_qc: VesselQcResult | None = None
     offset_qc: OffsetQcResult | None = None
@@ -43,6 +45,7 @@ class FullQcResult:
     def as_dict(self) -> dict:
         """Convert to ordered dict for report generation."""
         d = {}
+        if self.preprocess: d["0. Pre-Processing Check"] = self.preprocess
         if self.file_qc: d["A. File Integrity"] = self.file_qc
         if self.vessel_qc: d["B. Vessel/Offset Config"] = self.vessel_qc
         if self.offset_qc: d["C. Offset Verification"] = self.offset_qc
@@ -65,6 +68,9 @@ def run_full_qc(
     iho_order: str = "1a",
     generate_surfaces: bool = True,
     generate_reports: bool = True,
+    offsetmanager_db: str | Path | None = None,
+    lat_range: tuple[float, float] = (-90.0, 90.0),
+    lon_range: tuple[float, float] = (-180.0, 180.0),
 ) -> FullQcResult:
     """Execute complete MBES QC pipeline.
 
@@ -102,6 +108,19 @@ def run_full_qc(
         pds_file_list = sorted(Path(pds_dir).glob("*.pds"))
     elif pds_path:
         pds_file_list = [Path(pds_path)]
+
+    # ── 0. Pre-Processing Check ─────────────────────────────
+    if pds_file_list:
+        _header("0. Pre-Processing Validation")
+        result.preprocess = validate_preprocess(
+            pds_file_list[0],
+            offsetmanager_db=str(offsetmanager_db) if offsetmanager_db else None,
+            check_navigation=True,
+            lat_range=lat_range,
+            lon_range=lon_range,
+        )
+        from .preprocess_validator import print_validation_report
+        print_validation_report(result.preprocess)
 
     # ── A. File QC ──────────────────────────────────────────
     _header("A. File Integrity QC")
