@@ -415,13 +415,6 @@ def _try_dynamic_detection(data: bytes, ping: PdsPing) -> None:
                 i += _NUM_BEAMS
                 continue
 
-        # Across-track: all negative (port side only) with decreasing values
-        if len(ping.across_track) == 0 and mn < -5 and mx < 1 and std > 5:
-            if float(window[0]) < float(window[_NUM_BEAMS // 2]):
-                ping.across_track = window.copy()
-                i += _NUM_BEAMS
-                continue
-
         i += 1
 
 
