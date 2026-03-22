@@ -32,33 +32,15 @@
                             </a>
                         </li>
                         <li class="nav-item">
-                            <a class="nav-link" href="#">
-                                <span class="nav-link-icon"><i class="ti ti-file-check"></i></span>
-                                <span class="nav-link-title">파일QC</span>
+                            <a class="nav-link {% if request.path == '/new-qc' %}active{% endif %}" href="/new-qc">
+                                <span class="nav-link-icon"><i class="ti ti-player-play"></i></span>
+                                <span class="nav-link-title">New QC</span>
                             </a>
                         </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="#">
-                                <span class="nav-link-icon"><i class="ti ti-3d-cube-sphere"></i></span>
-                                <span class="nav-link-title">서피스</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="#">
-                                <span class="nav-link-icon"><i class="ti ti-map"></i></span>
-                                <span class="nav-link-title">커버리지</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="#">
-                                <span class="nav-link-icon"><i class="ti ti-arrows-cross"></i></span>
-                                <span class="nav-link-title">크로스라인</span>
-                            </a>
-                        </li>
-                        <li class="nav-item">
-                            <a class="nav-link" href="#">
-                                <span class="nav-link-icon"><i class="ti ti-report"></i></span>
-                                <span class="nav-link-title">보고서</span>
+                        <li class="nav-item dropdown">
+                            <a class="nav-link {% if '/qc/' in request.path %}active{% endif %}" href="#" data-bs-toggle="dropdown">
+                                <span class="nav-link-icon"><i class="ti ti-clipboard-check"></i></span>
+                                <span class="nav-link-title">Results</span>
                             </a>
                         </li>
                     </ul>

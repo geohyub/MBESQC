@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}QC Result #{{ job.id }}{% endblock %}
+
+{% block page_header %}
+<div class="row align-items-center">
+    <div class="col-auto">
+        <h2 class="page-title">
+            <i class="ti ti-clipboard-check me-2"></i>QC Result #{{ job.id }}
+        </h2>
+        <div class="page-subtitle">{{ job.pds_path | basename }}</div>
+    </div>
+    <div class="col-auto ms-auto d-flex gap-2">
+        {% if job.status == 'done' %}
+        <a href="/api/download/{{ job.id }}/excel" class="btn btn-green"><i class="ti ti-file-spreadsheet me-1"></i>Excel</a>
+        <a href="/api/download/{{ job.id }}/word" class="btn btn-blue"><i class="ti ti-file-text me-1"></i>Word</a>
+        <a href="/api/download/{{ job.id }}/ppt" class="btn btn-orange"><i class="ti ti-presentation me-1"></i>PPT</a>
+        {% endif %}
+        <a href="/new-qc" class="btn btn-outline-cyan"><i class="ti ti-plus me-1"></i>New QC</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+{% if job.status == 'error' %}
+<div class="alert alert-danger">
+    <h4 class="alert-title">QC Failed</h4>
+    <div>{{ job.progress }}</div>
+    {% if job.traceback %}<pre class="mt-2 small">{{ job.traceback }}</pre>{% endif %}
+</div>
+{% elif job.status == 'running' %}
+<div class="card">
+    <div class="card-body text-center py-5">
+        <div class="spinner-border text-cyan mb-3"></div>
+        <h3>Running QC...</h3>
+        <p class="text-secondary">{{ job.progress }}</p>
+    </div>
+</div>
+<script>
+setTimeout(() => location.reload(), 2000);
+</script>
+{% elif job.status == 'done' and job.result %}
+{% set r = job.result %}
+
+<!-- KPI Cards -->
+<div class="row row-deck row-cards mb-4">
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">Vessel</div>
+                <div class="h2 mb-0 mt-2">{{ r.vessel_name or '—' }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">Pings / Beams</div>
+                <div class="h2 mb-0 mt-2">{{ "{:,}".format(r.total_pings) }} <span class="fs-5 text-secondary">/ {{ "{:,}".format(r.total_beams) }}</span></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">Depth Range</div>
+                <div class="h2 mb-0 mt-2">{{ "%.1f"|format(r.depth_range[0]|abs) }} — {{ "%.1f"|format(r.depth_range[1]|abs) }} <span class="fs-5 text-secondary">m</span></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">Pre-Processing</div>
+                {% if r.preprocess %}
+                {% set pp = r.preprocess %}
+                <div class="h2 mb-0 mt-2">
+                    {% if pp.overall == 'PASS' %}
+                    <span class="badge bg-green fs-4">PASS</span>
+                    {% elif pp.overall == 'WARNING' %}
+                    <span class="badge bg-yellow fs-4">WARNING</span>
+                    {% elif pp.overall == 'FAIL' %}
+                    <span class="badge bg-red fs-4">FAIL</span>
+                    {% else %}
+                    <span class="badge bg-secondary fs-4">N/A</span>
+                    {% endif %}
+                </div>
+                <div class="mt-1">
+                    <span class="text-green">{{ pp.num_pass }} pass</span> /
+                    <span class="text-yellow">{{ pp.num_warn }} warn</span> /
+                    <span class="text-red">{{ pp.num_fail }} fail</span>
+                </div>
+                {% else %}
+                <div class="h2 mb-0 mt-2">—</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Pre-Processing Checks -->
+{% if r.preprocess and r.preprocess.checks %}
+<div class="card mb-4">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-shield-check me-2 text-cyan"></i>Pre-Processing Validation</h3>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+            <thead>
+                <tr>
+                    <th>Status</th>
+                    <th>Category</th>
+                    <th>Check</th>
+                    <th>PDS Value</th>
+                    <th>Reference</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in r.preprocess.checks %}
+                <tr>
+                    <td>
+                        {% if c.status == 'PASS' %}
+                        <span class="badge bg-green">PASS</span>
+                        {% elif c.status == 'WARNING' %}
+                        <span class="badge bg-yellow">WARN</span>
+                        {% elif c.status == 'FAIL' %}
+                        <span class="badge bg-red">FAIL</span>
+                        {% else %}
+                        <span class="badge bg-secondary">INFO</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ c.category }}</td>
+                    <td>{{ c.name }}</td>
+                    <td><code>{{ c.pds_value }}</code></td>
+                    <td>{{ c.reference_value or '—' }}</td>
+                    <td class="text-secondary small">{{ c.suggestion }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+<!-- Data Summary -->
+<div class="row row-deck row-cards mb-4">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-gps me-2 text-green"></i>Navigation</h3>
+            </div>
+            <div class="card-body">
+                <div class="datagrid">
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Records</div>
+                        <div class="datagrid-content">{{ r.nav_records }}</div>
+                    </div>
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Latitude</div>
+                        <div class="datagrid-content">{{ "%.6f"|format(r.lat_range[0]) }} — {{ "%.6f"|format(r.lat_range[1]) }}</div>
+                    </div>
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Longitude</div>
+                        <div class="datagrid-content">{{ "%.6f"|format(r.lon_range[0]) }} — {{ "%.6f"|format(r.lon_range[1]) }}</div>
+                    </div>
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Attitude Records</div>
+                        <div class="datagrid-content">{{ r.attitude_records }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-chart-bar me-2 text-blue"></i>Statistics</h3>
+            </div>
+            <div class="card-body">
+                <div class="datagrid">
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Total Pings</div>
+                        <div class="datagrid-content">{{ "{:,}".format(r.total_pings) }}</div>
+                    </div>
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Total Beams</div>
+                        <div class="datagrid-content">{{ "{:,}".format(r.total_beams) }}</div>
+                    </div>
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Elapsed Time</div>
+                        <div class="datagrid-content">{{ "%.1f"|format(r.elapsed_sec) }}s</div>
+                    </div>
+                    <div class="datagrid-item">
+                        <div class="datagrid-title">Lines</div>
+                        <div class="datagrid-content">{{ r.lines|length if r.lines else 0 }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Survey Lines Table -->
+{% if r.lines %}
+<div class="card mb-4">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-route me-2 text-purple"></i>Survey Lines</h3>
+        <div class="card-actions"><span class="badge bg-purple">{{ r.lines|length }}</span></div>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+            <thead>
+                <tr>
+                    <th>Line</th>
+                    <th>Format</th>
+                    <th class="text-end">Pings</th>
+                    <th class="text-end">Heading</th>
+                    <th class="text-end">Depth</th>
+                    <th class="text-end">Duration</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for line in r.lines %}
+                <tr>
+                    <td>{{ line.name }}</td>
+                    <td><span class="badge bg-cyan-lt">{{ line.format }}</span></td>
+                    <td class="text-end">{{ line.pings }}</td>
+                    <td class="text-end">{{ "%.1f"|format(line.heading) }}°</td>
+                    <td class="text-end">{{ "%.1f"|format(line.depth) }}m</td>
+                    <td class="text-end">{{ "%.1f"|format(line.duration) }}s</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% endif %}
+{% endblock %}

@@ -9,12 +9,9 @@
         </h2>
     </div>
     <div class="col-auto ms-auto d-flex gap-2">
-        <button class="btn btn-cyan" onclick="alert('QC runner coming soon')">
-            <i class="ti ti-player-play"></i> Run QC
-        </button>
-        <button class="btn btn-primary" onclick="alert('Report generator coming soon')">
-            <i class="ti ti-report"></i> Generate Report
-        </button>
+        <a href="/new-qc" class="btn btn-cyan">
+            <i class="ti ti-player-play me-1"></i> New QC
+        </a>
     </div>
 </div>
 {% endblock %}
@@ -25,12 +22,10 @@
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="subheader">파일 수</div>
-                </div>
-                <div class="h1 mb-0 mt-2">0</div>
+                <div class="subheader">QC Jobs</div>
+                <div class="h1 mb-0 mt-2">{{ total_jobs }}</div>
                 <div class="d-flex mt-2">
-                    <span class="text-secondary"><i class="ti ti-file"></i> GSF / PDS files</span>
+                    <span class="text-secondary"><i class="ti ti-clipboard-check"></i> Total analyses</span>
                 </div>
             </div>
         </div>
@@ -38,12 +33,19 @@
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="subheader">측선 수</div>
-                </div>
-                <div class="h1 mb-0 mt-2">0</div>
-                <div class="d-flex mt-2">
-                    <span class="text-secondary"><i class="ti ti-route"></i> Survey lines</span>
+                <div class="subheader">Completed</div>
+                <div class="h1 mb-0 mt-2 text-green">{{ jobs|length }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">Total Beams</div>
+                <div class="h1 mb-0 mt-2">
+                    {% set ns = namespace(total=0) %}
+                    {% for j in jobs if j.result %}{% set ns.total = ns.total + j.result.total_beams %}{% endfor %}
+                    {{ "{:,}".format(ns.total) }}
                 </div>
             </div>
         </div>
@@ -51,148 +53,84 @@
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="subheader">커버리지</div>
-                </div>
-                <div class="h1 mb-0 mt-2">&mdash; <span class="text-secondary fs-5">%</span></div>
-                <div class="d-flex mt-2">
-                    <span class="text-secondary"><i class="ti ti-map"></i> Area coverage</span>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-sm-6 col-lg-3">
-        <div class="card">
-            <div class="card-body">
-                <div class="d-flex align-items-center">
-                    <div class="subheader">IHO 등급</div>
-                </div>
-                <div class="h1 mb-0 mt-2">&mdash;</div>
-                <div class="d-flex mt-2">
-                    <span class="text-secondary"><i class="ti ti-certificate"></i> Order classification</span>
+                <div class="subheader">Status</div>
+                <div class="h1 mb-0 mt-2">
+                    {% if jobs %}
+                    <span class="badge bg-green fs-4">Active</span>
+                    {% else %}
+                    <span class="badge bg-secondary fs-4">No Data</span>
+                    {% endif %}
                 </div>
             </div>
         </div>
     </div>
 </div>
 
-<!-- QC Status Summary -->
-<div class="row row-cards mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body py-3">
-                <div class="d-flex align-items-center flex-wrap gap-4">
-                    <span class="text-secondary fw-bold text-uppercase small">QC Status</span>
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="badge bg-success"></span>
-                        <span>Pass <strong>0</strong></span>
-                    </div>
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="badge bg-danger"></span>
-                        <span>Fail <strong>0</strong></span>
-                    </div>
-                    <div class="d-flex align-items-center gap-2">
-                        <span class="badge bg-secondary"></span>
-                        <span>Pending <strong>0</strong></span>
-                    </div>
-                </div>
+<!-- Recent Results -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-history me-2 text-cyan"></i>Recent QC Results</h3>
+        <div class="card-actions"><span class="badge bg-cyan">{{ jobs|length }}</span></div>
+    </div>
+    {% if jobs %}
+    <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>File</th>
+                    <th>Vessel</th>
+                    <th class="text-center">Pings</th>
+                    <th class="text-center">Depth</th>
+                    <th class="text-center">Pre-Check</th>
+                    <th class="text-center">Time</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in jobs %}
+                {% set r = job.result %}
+                <tr>
+                    <td>{{ job.id }}</td>
+                    <td><code>{{ job.pds_path | basename }}</code></td>
+                    <td>{{ r.vessel_name if r else '—' }}</td>
+                    <td class="text-center">{{ "{:,}".format(r.total_pings) if r else '—' }}</td>
+                    <td class="text-center">
+                        {% if r and r.depth_range %}
+                        {{ "%.1f"|format(r.depth_range[0]|abs) }}–{{ "%.1f"|format(r.depth_range[1]|abs) }}m
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-center">
+                        {% if r and r.preprocess %}
+                        {% if r.preprocess.overall == 'PASS' %}
+                        <span class="badge bg-green">PASS</span>
+                        {% elif r.preprocess.overall == 'WARNING' %}
+                        <span class="badge bg-yellow">WARN</span>
+                        {% elif r.preprocess.overall == 'FAIL' %}
+                        <span class="badge bg-red">FAIL</span>
+                        {% else %}
+                        <span class="badge bg-secondary">N/A</span>
+                        {% endif %}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-center text-secondary">{{ "%.1f"|format(r.elapsed_sec) }}s</td>
+                    <td><a href="/qc/{{ job.id }}" class="btn btn-sm btn-outline-cyan">View</a></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card-body">
+        <div class="empty">
+            <div class="empty-icon"><i class="ti ti-3d-cube-sphere"></i></div>
+            <p class="empty-title">No QC results yet</p>
+            <p class="empty-subtitle text-secondary">Start by running a QC analysis on a PDS file.</p>
+            <div class="empty-action">
+                <a href="/new-qc" class="btn btn-cyan"><i class="ti ti-player-play me-2"></i>New QC</a>
             </div>
         </div>
     </div>
-</div>
-
-<div class="row row-deck row-cards mb-4">
-    <!-- File List Table -->
-    <div class="col-lg-8">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="ti ti-files me-2 text-cyan"></i>MBES Files
-                </h3>
-                <div class="card-actions">
-                    <span class="badge bg-secondary">0</span>
-                </div>
-            </div>
-            <div class="table-responsive">
-                <table class="table table-vcenter card-table">
-                    <thead>
-                        <tr>
-                            <th>File</th>
-                            <th>Type</th>
-                            <th class="text-center">Lines</th>
-                            <th class="text-center">Beams</th>
-                            <th class="text-center">QC Status</th>
-                            <th class="w-1"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td colspan="6" class="text-center py-4">
-                                <div class="empty">
-                                    <div class="empty-icon"><i class="ti ti-3d-cube-sphere"></i></div>
-                                    <p class="empty-title">No MBES files loaded</p>
-                                    <p class="empty-subtitle text-secondary">
-                                        Upload GSF or PDS files to begin quality control.
-                                    </p>
-                                </div>
-                            </td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <!-- Quick Actions -->
-    <div class="col-lg-4">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="ti ti-bolt me-2 text-yellow"></i>Quick Actions
-                </h3>
-            </div>
-            <div class="card-body">
-                <div class="d-grid gap-3">
-                    <a href="#" class="btn btn-outline-cyan">
-                        <i class="ti ti-file-check me-2"></i>Run File QC
-                    </a>
-                    <a href="#" class="btn btn-outline-primary">
-                        <i class="ti ti-3d-cube-sphere me-2"></i>Surface Analysis
-                    </a>
-                    <a href="#" class="btn btn-outline-green">
-                        <i class="ti ti-map me-2"></i>Coverage Check
-                    </a>
-                    <a href="#" class="btn btn-outline-purple">
-                        <i class="ti ti-arrows-cross me-2"></i>Crossline Compare
-                    </a>
-                    <a href="#" class="btn btn-outline-orange">
-                        <i class="ti ti-report me-2"></i>Generate Report
-                    </a>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Recent Results Timeline -->
-<div class="row row-deck row-cards">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="ti ti-clock me-2 text-secondary"></i>Recent Results
-                </h3>
-            </div>
-            <div class="card-body">
-                <div class="empty">
-                    <div class="empty-icon"><i class="ti ti-history"></i></div>
-                    <p class="empty-title">No recent activity</p>
-                    <p class="empty-subtitle text-secondary">
-                        QC results will appear here as you process MBES data.
-                    </p>
-                </div>
-            </div>
-        </div>
-    </div>
+    {% endif %}
 </div>
 {% endblock %}

@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% block title %}New QC{% endblock %}
+
+{% block page_header %}
+<div class="row align-items-center">
+    <div class="col-auto">
+        <h2 class="page-title"><i class="ti ti-player-play me-2"></i>New QC Analysis</h2>
+        <div class="page-subtitle">PDS 파일 경로를 입력하고 QC를 실행하세요.</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="row row-cards">
+    <!-- PDS File Input -->
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-file me-2 text-cyan"></i>PDS File</h3>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label required">PDS File Path</label>
+                    <input type="text" id="pds_path" class="form-control"
+                           placeholder="E:\project\MBES\file.pds">
+                    <small class="form-hint">PDS 파일의 전체 경로를 입력하세요.</small>
+                </div>
+                <button class="btn btn-outline-cyan" onclick="analyzePds()">
+                    <i class="ti ti-search me-1"></i>Analyze PDS
+                </button>
+            </div>
+        </div>
+
+        <!-- PDS Info Preview (hidden initially) -->
+        <div class="card mt-3" id="pds-info-card" style="display:none">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-info-circle me-2 text-blue"></i>PDS Information</h3>
+            </div>
+            <div class="card-body" id="pds-info-body">
+            </div>
+        </div>
+
+        <!-- Optional Companion Folders -->
+        <div class="card mt-3">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-folder me-2 text-green"></i>Companion Data (Optional)</h3>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">GSF Directory</label>
+                    <input type="text" id="gsf_dir" class="form-control"
+                           placeholder="E:\project\GSF (optional — auto-matches by timestamp)">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">HVF Directory</label>
+                    <input type="text" id="hvf_dir" class="form-control"
+                           placeholder="E:\project\Vessels (optional)">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-settings me-2 text-yellow"></i>QC Settings</h3>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">OffsetManager Config</label>
+                    <select id="om_config" class="form-select">
+                        <option value="">— None —</option>
+                        {% for cfg in om_configs %}
+                        <option value="{{ cfg.id }}">{{ cfg.vessel_name }} / {{ cfg.project_name }} ({{ cfg.config_date }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label class="form-label">Lat Min</label>
+                        <input type="number" id="lat_min" class="form-control" value="-90" step="0.1">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Lat Max</label>
+                        <input type="number" id="lat_max" class="form-control" value="90" step="0.1">
+                    </div>
+                </div>
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label class="form-label">Lon Min</label>
+                        <input type="number" id="lon_min" class="form-control" value="-180" step="0.1">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Lon Max</label>
+                        <input type="number" id="lon_max" class="form-control" value="180" step="0.1">
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Max Pings</label>
+                    <input type="number" id="max_pings" class="form-control" value="" placeholder="All (leave empty)">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Cell Size (m)</label>
+                    <input type="number" id="cell_size" class="form-control" value="5" step="0.5">
+                </div>
+            </div>
+            <div class="card-footer text-end">
+                <button class="btn btn-cyan btn-lg w-100" onclick="runQc()" id="run-btn">
+                    <i class="ti ti-player-play me-2"></i>Run QC
+                </button>
+            </div>
+        </div>
+
+        <!-- Progress (hidden initially) -->
+        <div class="card mt-3" id="progress-card" style="display:none">
+            <div class="card-body">
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border spinner-border-sm text-cyan me-3"></div>
+                    <div>
+                        <div class="fw-bold" id="progress-text">Starting...</div>
+                        <div class="text-secondary small" id="progress-detail"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function analyzePds() {
+    const path = document.getElementById('pds_path').value;
+    if (!path) { alert('PDS 파일 경로를 입력하세요.'); return; }
+
+    fetch('/api/pds-info', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({pds_path: path})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { alert(data.error); return; }
+
+        const card = document.getElementById('pds-info-card');
+        card.style.display = 'block';
+
+        let sensors = '';
+        if (data.sensors) {
+            for (const [name, xyz] of Object.entries(data.sensors)) {
+                if (name === 'Zero Offset') continue;
+                sensors += `<tr><td>${name}</td><td>${xyz.x.toFixed(3)}</td><td>${xyz.y.toFixed(3)}</td><td>${xyz.z.toFixed(3)}</td></tr>`;
+            }
+        }
+
+        document.getElementById('pds-info-body').innerHTML = `
+            <div class="row mb-3">
+                <div class="col-4"><strong>Vessel:</strong> ${data.vessel_name}</div>
+                <div class="col-4"><strong>Survey:</strong> ${data.survey_type}</div>
+                <div class="col-4"><strong>Size:</strong> ${data.file_size_mb.toFixed(1)} MB</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-4"><strong>Coord:</strong> ${data.coord_system}</div>
+                <div class="col-4"><strong>Start:</strong> ${data.start_time}</div>
+                <div class="col-4"><strong>PDS Ver:</strong> ${data.file_version}</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-3">
+                    <span class="badge ${data.apply_roll ? 'bg-green' : 'bg-red'}">Roll ${data.apply_roll ? 'ON' : 'OFF'}</span>
+                </div>
+                <div class="col-3">
+                    <span class="badge ${data.apply_pitch ? 'bg-green' : 'bg-red'}">Pitch ${data.apply_pitch ? 'ON' : 'OFF'}</span>
+                </div>
+                <div class="col-3">
+                    <span class="badge ${data.apply_heave ? 'bg-green' : 'bg-red'}">Heave ${data.apply_heave ? 'ON' : 'OFF'}</span>
+                </div>
+                <div class="col-3">
+                    <span class="badge ${data.apply_svp ? 'bg-green' : 'bg-yellow'}">SVP ${data.apply_svp ? 'ON' : 'OFF'}</span>
+                </div>
+            </div>
+            <div class="mb-3">
+                <strong>Calibration:</strong> Roll=${data.static_roll.toFixed(4)}° Pitch=${data.static_pitch.toFixed(4)}°
+                &nbsp; <strong>Sealevel:</strong> ${data.sealevel}m &nbsp; <strong>Draft:</strong> ${data.draft}m
+            </div>
+            ${sensors ? `<table class="table table-sm table-vcenter"><thead><tr><th>Sensor</th><th>X</th><th>Y</th><th>Z</th></tr></thead><tbody>${sensors}</tbody></table>` : ''}
+        `;
+    })
+    .catch(e => alert('Error: ' + e));
+}
+
+function runQc() {
+    const path = document.getElementById('pds_path').value;
+    if (!path) { alert('PDS 파일 경로를 입력하세요.'); return; }
+
+    const btn = document.getElementById('run-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Running...';
+
+    document.getElementById('progress-card').style.display = 'block';
+
+    const maxPings = document.getElementById('max_pings').value;
+
+    fetch('/api/run-qc', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            pds_path: path,
+            gsf_dir: document.getElementById('gsf_dir').value || null,
+            hvf_dir: document.getElementById('hvf_dir').value || null,
+            om_config_id: document.getElementById('om_config').value || null,
+            lat_range: [parseFloat(document.getElementById('lat_min').value), parseFloat(document.getElementById('lat_max').value)],
+            lon_range: [parseFloat(document.getElementById('lon_min').value), parseFloat(document.getElementById('lon_max').value)],
+            max_pings: maxPings ? parseInt(maxPings) : null,
+            cell_size: parseFloat(document.getElementById('cell_size').value),
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { alert(data.error); btn.disabled = false; return; }
+        pollStatus(data.job_id);
+    })
+    .catch(e => { alert('Error: ' + e); btn.disabled = false; });
+}
+
+function pollStatus(jobId) {
+    const interval = setInterval(() => {
+        fetch(`/api/status/${jobId}`)
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('progress-text').textContent = data.progress || data.status;
+            if (data.status === 'done' || data.status === 'error') {
+                clearInterval(interval);
+                window.location.href = `/qc/${jobId}`;
+            }
+        });
+    }, 1000);
+}
+</script>
+{% endblock %}
