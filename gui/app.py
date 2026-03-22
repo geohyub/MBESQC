@@ -112,12 +112,19 @@ class MBESQCApp(GeoViewApp):
     # ─── HOME PAGE ───────────────────────────────────────────────
 
     def _build_home(self, frame):
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(16, 8))
+        scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # ── Accent bar ──
+        ctk.CTkFrame(scroll, height=6, fg_color="#10B981",
+                     corner_radius=0).pack(fill="x")
+
+        header = ctk.CTkFrame(scroll, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(12, 8))
 
         ctk.CTkLabel(
             header, text="MBES QC 대시보드",
-            font=(BASE, 20, "bold"),
+            font=(BASE, 22, "bold"),
             text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
         ).pack(side="left")
 
@@ -127,8 +134,8 @@ class MBESQCApp(GeoViewApp):
             text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
         ).pack(side="left", padx=12)
 
-        # KPI cards row
-        kpi_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        # ── KPI cards row (6 cards: files, lines, points, coverage, crossline RMS, IHO) ──
+        kpi_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         kpi_frame.pack(fill="x", padx=16, pady=(0, 8))
 
         self._kpi = {}
@@ -137,6 +144,8 @@ class MBESQCApp(GeoViewApp):
             ("측선", colors.ACCENT, "0", "개"),
             ("포인트", colors.ACCENT_WARM, "0", "개"),
             ("커버리지", "#805AD5", "—", "%"),
+            ("크로스라인 RMS", "#E53E3E", "—", "m"),
+            ("IHO 등급", "#10B981", "—", ""),
         ]
         for name, color, initial, unit in kpi_defs:
             card = KPICard(kpi_frame, title=name, accent_color=color,
@@ -144,15 +153,40 @@ class MBESQCApp(GeoViewApp):
             card.pack(side="left", expand=True, fill="x", padx=4)
             self._kpi[name] = card
 
-        # File table
+        # ── Survey overview summary card ──
+        overview_card = ctk.CTkFrame(scroll, corner_radius=12,
+                                     fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                                     border_width=1,
+                                     border_color=(colors.TABLE_BORDER, colors.DARK_BORDER))
+        overview_card.pack(fill="x", padx=16, pady=(4, 8))
+
+        ctk.CTkFrame(overview_card, height=4, fg_color="#10B981",
+                     corner_radius=0).pack(fill="x")
+        ov_inner = ctk.CTkFrame(overview_card, fg_color="transparent")
+        ov_inner.pack(fill="x", padx=16, pady=12)
+
+        ctk.CTkLabel(ov_inner, text="서베이 개요",
+                     font=(BASE, 14, "bold"),
+                     text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
+                     ).pack(anchor="w")
+        self._survey_summary_label = ctk.CTkLabel(
+            ov_inner,
+            text="파일을 로드하면 서베이 요약 정보가 표시됩니다.",
+            font=(BASE, 11),
+            text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+            anchor="w", wraplength=800,
+        )
+        self._survey_summary_label.pack(anchor="w", pady=(4, 0))
+
+        # ── File table with status icons ──
         ctk.CTkLabel(
-            frame, text="  로드된 파일", font=(BASE, 12, "bold"),
+            scroll, text="  로드된 파일", font=(BASE, 13, "bold"),
             text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
             anchor="w",
         ).pack(fill="x", padx=16, pady=(8, 4))
 
         self._file_table = DataTable(
-            frame,
+            scroll,
             columns=["파일명", "유형", "크기", "상태"],
             column_widths=[350, 100, 120, 100],
             on_row_click=self._on_file_select,
@@ -162,64 +196,136 @@ class MBESQCApp(GeoViewApp):
     # ─── FILE QC PAGE ────────────────────────────────────────────
 
     def _build_file_qc(self, frame):
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(16, 8))
+        scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # ── Accent bar ──
+        ctk.CTkFrame(scroll, height=6, fg_color=colors.PRIMARY_LIGHT,
+                     corner_radius=0).pack(fill="x")
+
+        header = ctk.CTkFrame(scroll, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(12, 8))
 
         ctk.CTkLabel(
             header, text="파일 무결성 검사",
-            font=(BASE, 18, "bold"),
+            font=(BASE, 20, "bold"),
             text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
         ).pack(side="left")
+        ctk.CTkLabel(
+            header, text="GSF/PDS 파일 구조 및 무결성 검증",
+            font=(BASE, 11),
+            text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+        ).pack(side="left", padx=12)
 
         ctk.CTkButton(
-            header, text="파일 QC 실행", width=120, height=30,
-            font=(BASE, 11), fg_color=colors.PRIMARY_LIGHT,
-            hover_color="#3B6FA0", corner_radius=15,
+            header, text="▶  파일 QC 실행", width=150, height=36,
+            font=(BASE, 12, "bold"), fg_color=colors.PRIMARY_LIGHT,
+            hover_color="#3B6FA0", corner_radius=10,
             command=self._run_file_qc_only,
         ).pack(side="right", padx=5)
 
-        # Results table
-        self._fileqc_table = DataTable(
-            frame,
-            columns=["항목", "상태", "상세"],
-            column_widths=[200, 100, 500],
-        )
-        self._fileqc_table.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        # ── Summary pass/fail bar ──
+        summary_bar = ctk.CTkFrame(scroll, corner_radius=10,
+                                   fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                                   border_width=1,
+                                   border_color=(colors.TABLE_BORDER, colors.DARK_BORDER))
+        summary_bar.pack(fill="x", padx=16, pady=(4, 8))
+        sb_inner = ctk.CTkFrame(summary_bar, fg_color="transparent")
+        sb_inner.pack(fill="x", padx=16, pady=10)
 
-        # Log
+        self._fileqc_pass_label = ctk.CTkLabel(
+            sb_inner, text="PASS: —", font=(BASE, 13, "bold"),
+            text_color="#38A169")
+        self._fileqc_pass_label.pack(side="left", padx=(0, 20))
+        self._fileqc_warn_label = ctk.CTkLabel(
+            sb_inner, text="WARN: —", font=(BASE, 13, "bold"),
+            text_color="#D69E2E")
+        self._fileqc_warn_label.pack(side="left", padx=(0, 20))
+        self._fileqc_fail_label = ctk.CTkLabel(
+            sb_inner, text="FAIL: —", font=(BASE, 13, "bold"),
+            text_color="#E53E3E")
+        self._fileqc_fail_label.pack(side="left")
+
+        # ── Validation checklist section ──
         ctk.CTkLabel(
-            frame, text="  검사 로그", font=(BASE, 11, "bold"),
+            scroll, text="  검증 항목", font=(BASE, 13, "bold"),
             text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
             anchor="w",
         ).pack(fill="x", padx=16, pady=(8, 4))
 
-        self._fileqc_log = ActivityLog(frame, height=180)
-        self._fileqc_log.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        # Results table
+        self._fileqc_table = DataTable(
+            scroll,
+            columns=["항목", "상태", "상세"],
+            column_widths=[200, 100, 500],
+        )
+        self._fileqc_table.pack(fill="x", padx=16, pady=(0, 8))
+
+        # ── Detail expansion area ──
+        detail_card = ctk.CTkFrame(scroll, corner_radius=10,
+                                   fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                                   border_width=1,
+                                   border_color=(colors.TABLE_BORDER, colors.DARK_BORDER))
+        detail_card.pack(fill="x", padx=16, pady=(0, 8))
+        ctk.CTkLabel(detail_card, text="  실패 항목 상세",
+                     font=(BASE, 12, "bold"),
+                     text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
+                     ).pack(fill="x", padx=12, pady=(10, 4), anchor="w")
+        self._fileqc_detail_text = ctk.CTkTextbox(
+            detail_card, font=(MONO, 10), height=100,
+            fg_color=(colors.SECTION_BG, "#1A202C"), corner_radius=6)
+        self._fileqc_detail_text.pack(fill="x", padx=12, pady=(0, 10))
+        self._fileqc_detail_text.insert("end", "QC 실행 후 실패 항목의 상세 정보가 표시됩니다.\n")
+
+        # Log
+        ctk.CTkLabel(
+            scroll, text="  검사 로그", font=(BASE, 12, "bold"),
+            text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(8, 4))
+
+        self._fileqc_log = ActivityLog(scroll, height=150)
+        self._fileqc_log.pack(fill="x", padx=16, pady=(0, 16))
 
     # ─── SURFACE PAGE ────────────────────────────────────────────
 
     def _build_surface(self, frame):
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(16, 8))
+        scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # ── Accent bar ──
+        ctk.CTkFrame(scroll, height=6, fg_color=colors.ACCENT,
+                     corner_radius=0).pack(fill="x")
+
+        header = ctk.CTkFrame(scroll, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(12, 8))
 
         ctk.CTkLabel(
             header, text="서피스 생성 / QC",
-            font=(BASE, 18, "bold"),
+            font=(BASE, 20, "bold"),
             text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
         ).pack(side="left")
+        ctk.CTkLabel(
+            header, text="수심 그리드 생성 및 IHO 적합성 검증",
+            font=(BASE, 11),
+            text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+        ).pack(side="left", padx=12)
 
-        # Controls row
-        ctrl = ctk.CTkFrame(frame, fg_color=(colors.SURFACE, colors.DARK_SURFACE),
-                            corner_radius=10, border_width=1,
+        # ── Parameter card ──
+        ctrl = ctk.CTkFrame(scroll, fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                            corner_radius=12, border_width=1,
                             border_color=(colors.TABLE_BORDER, colors.DARK_BORDER))
         ctrl.pack(fill="x", padx=16, pady=(0, 8))
 
-        ctk.CTkLabel(ctrl, text="  그리드 설정", font=(BASE, 12, "bold"),
+        ctk.CTkFrame(ctrl, height=4, fg_color=colors.ACCENT,
+                     corner_radius=0).pack(fill="x")
+
+        ctk.CTkLabel(ctrl, text="  그리드 파라미터", font=(BASE, 13, "bold"),
                      text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
                      ).pack(fill="x", padx=12, pady=(10, 6), anchor="w")
 
         params_row = ctk.CTkFrame(ctrl, fg_color="transparent")
-        params_row.pack(fill="x", padx=16, pady=(0, 12))
+        params_row.pack(fill="x", padx=16, pady=(0, 6))
 
         # Cell size
         ctk.CTkLabel(params_row, text="셀 크기 (m):", font=(BASE, 12),
@@ -229,57 +335,121 @@ class MBESQCApp(GeoViewApp):
         self._cell_size_entry.insert(0, "5.0")
         self._cell_size_entry.pack(side="left", padx=(0, 20))
 
-        # IHO Order
-        ctk.CTkLabel(params_row, text="IHO 기준:", font=(BASE, 12),
-                     text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
-                     ).pack(side="left", padx=(0, 8))
-        self._iho_combo = ctk.CTkComboBox(
-            params_row, values=["Special", "1a", "1b", "2"],
-            width=100, font=(MONO, 12))
-        self._iho_combo.set("1a")
-        self._iho_combo.pack(side="left", padx=(0, 20))
-
         ctk.CTkButton(
-            params_row, text="서피스 생성", width=120, height=30,
-            font=(BASE, 11), fg_color=colors.ACCENT,
-            hover_color="#2F855A", corner_radius=15,
+            params_row, text="▶  서피스 생성", width=150, height=36,
+            font=(BASE, 12, "bold"), fg_color=colors.ACCENT,
+            hover_color="#2F855A", corner_radius=10,
             command=self._run_surface_build,
         ).pack(side="right", padx=5)
 
-        # Surface stats
+        # IHO Order as radio buttons
+        iho_frame = ctk.CTkFrame(ctrl, fg_color="transparent")
+        iho_frame.pack(fill="x", padx=16, pady=(0, 12))
+
+        ctk.CTkLabel(iho_frame, text="IHO 기준:", font=(BASE, 12),
+                     text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
+                     ).pack(side="left", padx=(0, 12))
+
+        self._iho_var = ctk.StringVar(value="1a")
+        for order_val in ["Special", "1a", "1b", "2"]:
+            ctk.CTkRadioButton(
+                iho_frame, text=order_val, variable=self._iho_var,
+                value=order_val, font=(BASE, 12),
+                radiobutton_width=18, radiobutton_height=18,
+                fg_color=colors.ACCENT,
+            ).pack(side="left", padx=(0, 16))
+
+        # Keep _iho_combo as compatibility shim (hidden)
+        self._iho_combo = type('Shim', (), {'get': lambda s: self._iho_var.get(),
+                                             'set': lambda s, v: self._iho_var.set(v)})()
+
+        # ── Grid stats display: key metrics ──
+        stats_section = ctk.CTkFrame(scroll, fg_color="transparent")
+        stats_section.pack(fill="x", padx=16, pady=(4, 4))
+        ctk.CTkLabel(stats_section, text="  그리드 통계", font=(BASE, 13, "bold"),
+                     text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
+                     ).pack(anchor="w", pady=(0, 6))
+
+        stats_cards_row = ctk.CTkFrame(stats_section, fg_color="transparent")
+        stats_cards_row.pack(fill="x")
+
+        self._surf_stat_kpis = {}
+        for name, clr, val, unit in [
+            ("최소 수심", "#06B6D4", "—", "m"),
+            ("최대 수심", "#2D5F8A", "—", "m"),
+            ("평균 수심", colors.PRIMARY_LIGHT, "—", "m"),
+            ("셀 수", "#D69E2E", "—", "개"),
+            ("커버리지", "#10B981", "—", "%"),
+        ]:
+            c = KPICard(stats_cards_row, title=name, accent_color=clr,
+                        initial_value=val, unit=unit)
+            c.pack(side="left", expand=True, fill="x", padx=4)
+            self._surf_stat_kpis[name] = c
+
+        # Surface stats table
         self._surface_stats = DataTable(
-            frame,
+            scroll,
             columns=["항목", "값", "단위"],
             column_widths=[250, 200, 100],
         )
-        self._surface_stats.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        self._surface_stats.pack(fill="x", padx=16, pady=(8, 8))
+
+        # ── Surface preview placeholder ──
+        preview_card = ctk.CTkFrame(scroll, corner_radius=12,
+                                    fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                                    border_width=1,
+                                    border_color=(colors.TABLE_BORDER, colors.DARK_BORDER),
+                                    height=160)
+        preview_card.pack(fill="x", padx=16, pady=(0, 8))
+        preview_card.pack_propagate(False)
+        ctk.CTkLabel(preview_card, text="서피스 미리보기",
+                     font=(BASE, 13, "bold"),
+                     text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
+                     ).pack(anchor="w", padx=16, pady=(12, 0))
+        ctk.CTkLabel(preview_card,
+                     text="서피스 생성 후 수심 그리드 이미지가 표시됩니다 (matplotlib 연동 예정)",
+                     font=(BASE, 11),
+                     text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+                     ).pack(expand=True)
 
         # Log
-        self._surface_log = ActivityLog(frame, height=180)
-        self._surface_log.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._surface_log = ActivityLog(scroll, height=140)
+        self._surface_log.pack(fill="x", padx=16, pady=(0, 16))
 
     # ─── COVERAGE PAGE ───────────────────────────────────────────
 
     def _build_coverage(self, frame):
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(16, 8))
+        scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # ── Accent bar ──
+        ctk.CTkFrame(scroll, height=6, fg_color="#805AD5",
+                     corner_radius=0).pack(fill="x")
+
+        header = ctk.CTkFrame(scroll, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(12, 8))
 
         ctk.CTkLabel(
             header, text="커버리지 분석",
-            font=(BASE, 18, "bold"),
+            font=(BASE, 20, "bold"),
             text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
         ).pack(side="left")
+        ctk.CTkLabel(
+            header, text="측선 커버리지 및 중첩률 분석",
+            font=(BASE, 11),
+            text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+        ).pack(side="left", padx=12)
 
         ctk.CTkButton(
-            header, text="커버리지 분석", width=130, height=30,
-            font=(BASE, 11), fg_color=colors.PRIMARY_LIGHT,
-            hover_color="#3B6FA0", corner_radius=15,
+            header, text="▶  커버리지 분석", width=160, height=36,
+            font=(BASE, 12, "bold"), fg_color="#805AD5",
+            hover_color="#6B46C1", corner_radius=10,
             command=self._run_coverage_qc_only,
         ).pack(side="right", padx=5)
 
-        # KPI row for coverage
-        cov_kpi = ctk.CTkFrame(frame, fg_color="transparent")
-        cov_kpi.pack(fill="x", padx=16, pady=(0, 8))
+        # ── Coverage KPIs as large cards ──
+        cov_kpi = ctk.CTkFrame(scroll, fg_color="transparent")
+        cov_kpi.pack(fill="x", padx=16, pady=(4, 8))
 
         self._cov_kpi = {}
         cov_defs = [
@@ -287,6 +457,7 @@ class MBESQCApp(GeoViewApp):
             ("총 거리", colors.ACCENT, "0.0", "km"),
             ("커버리지 면적", colors.ACCENT_WARM, "0.0", "km²"),
             ("평균 중첩률", "#805AD5", "—", "%"),
+            ("갭 수", "#E53E3E", "—", "개"),
         ]
         for name, color, initial, unit in cov_defs:
             card = KPICard(cov_kpi, title=name, accent_color=color,
@@ -294,43 +465,87 @@ class MBESQCApp(GeoViewApp):
             card.pack(side="left", expand=True, fill="x", padx=4)
             self._cov_kpi[name] = card
 
-        # Line details table
+        # ── Line details table ──
         ctk.CTkLabel(
-            frame, text="  측선 상세", font=(BASE, 11, "bold"),
+            scroll, text="  측선 상세", font=(BASE, 13, "bold"),
             text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
             anchor="w",
         ).pack(fill="x", padx=16, pady=(8, 4))
 
         self._coverage_table = DataTable(
-            frame,
+            scroll,
             columns=["파일명", "핑 수", "길이 (m)", "평균 수심 (m)", "평균 스워스 (m)", "방위각 (°)"],
             column_widths=[200, 80, 100, 120, 120, 100],
         )
-        self._coverage_table.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        self._coverage_table.pack(fill="x", padx=16, pady=(0, 8))
 
-        # QC items
+        # ── QC items ──
+        ctk.CTkLabel(
+            scroll, text="  QC 검증 항목", font=(BASE, 13, "bold"),
+            text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(8, 4))
+
         self._coverage_qc_table = DataTable(
-            frame,
+            scroll,
             columns=["항목", "상태", "상세"],
             column_widths=[200, 100, 500],
         )
-        self._coverage_qc_table.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._coverage_qc_table.pack(fill="x", padx=16, pady=(0, 8))
+
+        # ── Summary bar chart placeholder ──
+        chart_card = ctk.CTkFrame(scroll, corner_radius=12,
+                                  fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                                  border_width=1,
+                                  border_color=(colors.TABLE_BORDER, colors.DARK_BORDER),
+                                  height=160)
+        chart_card.pack(fill="x", padx=16, pady=(4, 16))
+        chart_card.pack_propagate(False)
+        ctk.CTkLabel(chart_card, text="커버리지 요약 차트",
+                     font=(BASE, 13, "bold"),
+                     text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
+                     ).pack(anchor="w", padx=16, pady=(12, 0))
+        ctk.CTkLabel(chart_card,
+                     text="커버리지 분석 후 측선별 거리/갭/중첩 차트가 표시됩니다 (matplotlib 연동 예정)",
+                     font=(BASE, 11),
+                     text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+                     ).pack(expand=True)
 
     # ─── REPORTS PAGE ────────────────────────────────────────────
 
     def _build_reports(self, frame):
-        header = ctk.CTkFrame(frame, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(16, 8))
+        scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+
+        # ── Accent bar ──
+        ctk.CTkFrame(scroll, height=6, fg_color=colors.ACCENT_WARM,
+                     corner_radius=0).pack(fill="x")
+
+        header = ctk.CTkFrame(scroll, fg_color="transparent")
+        header.pack(fill="x", padx=16, pady=(12, 8))
 
         ctk.CTkLabel(
             header, text="보고서 생성",
-            font=(BASE, 18, "bold"),
+            font=(BASE, 20, "bold"),
             text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
         ).pack(side="left")
+        ctk.CTkLabel(
+            header, text="QC 결과 보고서 내보내기",
+            font=(BASE, 11),
+            text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+        ).pack(side="left", padx=12)
+
+        # ── Prominent one-click button ──
+        ctk.CTkButton(
+            scroll, text="▶  전체 QC + 보고서 생성", width=300, height=48,
+            font=(BASE, 15, "bold"), fg_color=colors.ACCENT,
+            hover_color="#2F855A", corner_radius=10,
+            command=self._run_full_qc,
+        ).pack(padx=16, pady=(4, 12), anchor="w")
 
         # Output directory
-        dir_row = ctk.CTkFrame(frame, fg_color=(colors.SURFACE, colors.DARK_SURFACE),
-                               corner_radius=10, border_width=1,
+        dir_row = ctk.CTkFrame(scroll, fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                               corner_radius=12, border_width=1,
                                border_color=(colors.TABLE_BORDER, colors.DARK_BORDER))
         dir_row.pack(fill="x", padx=16, pady=(0, 8))
 
@@ -349,37 +564,72 @@ class MBESQCApp(GeoViewApp):
         self._output_label.pack(side="left", fill="x", expand=True)
 
         ctk.CTkButton(
-            inner, text="폴더 선택", width=100, height=28,
+            inner, text="📂  폴더 선택", width=120, height=32,
             font=(BASE, 11), fg_color=colors.PRIMARY_LIGHT,
+            corner_radius=8,
             command=self._select_output_dir,
         ).pack(side="right", padx=5)
 
-        # Report buttons
-        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(8, 8))
+        # ── Format cards as large tiles ──
+        ctk.CTkLabel(scroll, text="  보고서 형식", font=(BASE, 13, "bold"),
+                     text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
+                     anchor="w").pack(fill="x", padx=16, pady=(8, 6))
 
-        report_btns = [
-            ("전체 QC 실행 + 보고서", colors.ACCENT, self._run_full_qc),
-            ("Excel 보고서", colors.PRIMARY_LIGHT, self._run_excel_report),
-            ("Word 보고서", colors.PRIMARY_LIGHT, self._run_word_report),
-            ("DQR PPT 생성", colors.ACCENT_WARM, self._run_dqr_ppt),
+        tile_row = ctk.CTkFrame(scroll, fg_color="transparent")
+        tile_row.pack(fill="x", padx=16, pady=(0, 8))
+
+        report_tiles = [
+            ("Excel 보고서", "#38A169", self._run_excel_report,
+             "XLS", "데이터 테이블 + 차트", ".xlsx"),
+            ("Word 보고서", colors.PRIMARY_LIGHT, self._run_word_report,
+             "DOC", "전문 QC 보고서", ".docx"),
+            ("DQR PPT", colors.ACCENT_WARM, self._run_dqr_ppt,
+             "PPT", "프레젠테이션 DQR", ".pptx"),
         ]
-        for text, color, cmd in report_btns:
-            ctk.CTkButton(
-                btn_frame, text=text, width=160, height=36,
-                font=(BASE, 12), fg_color=color,
-                corner_radius=15, command=cmd,
-            ).pack(side="left", padx=6)
+        for label, clr, cmd, icon_txt, desc, ext in report_tiles:
+            tile = ctk.CTkFrame(tile_row, corner_radius=12,
+                                fg_color=(colors.SURFACE, colors.DARK_SURFACE),
+                                border_width=1,
+                                border_color=(colors.TABLE_BORDER, colors.DARK_BORDER))
+            tile.pack(side="left", expand=True, fill="both", padx=6, pady=4)
+
+            ctk.CTkFrame(tile, height=6, fg_color=clr,
+                         corner_radius=0).pack(fill="x")
+
+            t_inner = ctk.CTkFrame(tile, fg_color="transparent")
+            t_inner.pack(fill="both", padx=16, pady=14)
+
+            # Icon badge
+            badge = ctk.CTkFrame(t_inner, width=46, height=46,
+                                 fg_color=clr, corner_radius=10)
+            badge.pack(anchor="w", pady=(0, 8))
+            badge.pack_propagate(False)
+            ctk.CTkLabel(badge, text=icon_txt, font=(BASE, 14, "bold"),
+                         text_color="#FFFFFF").pack(expand=True)
+
+            ctk.CTkLabel(t_inner, text=label, font=(BASE, 14, "bold"),
+                         text_color=(colors.TEXT_PRIMARY, colors.DARK_TEXT),
+                         ).pack(anchor="w")
+            ctk.CTkLabel(t_inner, text=desc, font=(BASE, 10),
+                         text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+                         ).pack(anchor="w", pady=(2, 2))
+            ctk.CTkLabel(t_inner, text=f"형식: {ext}", font=(MONO, 10),
+                         text_color=(colors.TEXT_MUTED, colors.DARK_TEXT_MUTED),
+                         ).pack(anchor="w", pady=(0, 8))
+            ctk.CTkButton(t_inner, text="내보내기", width=130, height=34,
+                          font=(BASE, 12, "bold"), fg_color=clr,
+                          corner_radius=8, command=cmd,
+                          ).pack(anchor="w")
 
         # Report log
         ctk.CTkLabel(
-            frame, text="  보고서 로그", font=(BASE, 11, "bold"),
+            scroll, text="  보고서 로그", font=(BASE, 12, "bold"),
             text_color=(colors.TEXT_SECONDARY, colors.DARK_TEXT_SECONDARY),
             anchor="w",
         ).pack(fill="x", padx=16, pady=(8, 4))
 
-        self._report_log = ActivityLog(frame, height=300)
-        self._report_log.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._report_log = ActivityLog(scroll, height=250)
+        self._report_log.pack(fill="x", padx=16, pady=(0, 16))
 
     # ─── ACTIONS ─────────────────────────────────────────────────
 
@@ -415,23 +665,31 @@ class MBESQCApp(GeoViewApp):
             p = Path(f)
             size = p.stat().st_size if p.exists() else 0
             size_str = f"{size / 1024:.1f} KB" if size < 1_048_576 else f"{size / 1_048_576:.1f} MB"
-            data.append([p.name, "GSF", size_str, "대기"])
+            data.append([p.name, "GSF", size_str, "● 대기"])
         for f in self.pds_files:
             p = Path(f)
             size = p.stat().st_size if p.exists() else 0
             size_str = f"{size / 1024:.1f} KB" if size < 1_048_576 else f"{size / 1_048_576:.1f} MB"
-            data.append([p.name, "PDS", size_str, "대기"])
+            data.append([p.name, "PDS", size_str, "● 대기"])
         if self.hvf_path:
             p = Path(self.hvf_path)
             size = p.stat().st_size if p.exists() else 0
             size_str = f"{size / 1024:.1f} KB" if size < 1_048_576 else f"{size / 1_048_576:.1f} MB"
-            data.append([p.name, "HVF", size_str, "대기"])
+            data.append([p.name, "HVF", size_str, "● 로드됨"])
 
         self._file_table.set_data(data)
         total_files = len(self.gsf_files) + len(self.pds_files)
         self._kpi["파일"].set_value(str(total_files))
         self._kpi["측선"].set_value(str(len(self.gsf_files)))
         self.set_status(f"{total_files}개 파일 로드됨")
+
+        # Update survey summary
+        if hasattr(self, '_survey_summary_label'):
+            hvf_str = f" | HVF: {Path(self.hvf_path).name}" if self.hvf_path else ""
+            self._survey_summary_label.configure(
+                text=f"GSF: {len(self.gsf_files)}개 | PDS: {len(self.pds_files)}개{hvf_str} | "
+                     f"총 파일: {total_files + (1 if self.hvf_path else 0)}개"
+            )
 
     def _on_file_select(self, idx, row):
         self.set_status(f"선택: {row[0]}")
