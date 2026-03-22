@@ -15,6 +15,7 @@ Automatically:
 
 from __future__ import annotations
 
+import struct
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -310,6 +311,7 @@ def run_pds_qc(
     print(f"  Total: {len(result.swath_lines)} lines, {sum(s.num_pings for s in result.swath_lines)} pings, {total_beams:,} beams")
 
     # ── 5. Post-Processing QC ────────────────────────────
+    # Reuse GSF objects from step 4 if already loaded
     gsf_objects = []
     if companions.get('gsf'):
         for gsf_path in companions['gsf'][:10]:
@@ -317,8 +319,8 @@ def run_pds_qc(
                 gsf = read_gsf(str(gsf_path), max_pings=max_pings,
                                load_attitude=True, load_svp=True)
                 gsf_objects.append(gsf)
-            except:
-                pass
+            except (IOError, OSError, ValueError, struct.error) as e:
+                print(f"  GSF skip: {gsf_path.name} ({e})")
 
     if gsf_objects:
         gsf_main = gsf_objects[0]

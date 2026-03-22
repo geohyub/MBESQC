@@ -205,9 +205,10 @@ def _read_u8_array(data: bytes, offset: int, count: int) -> np.ndarray:
 def _find_text_header_end(filepath: str) -> int:
     """Find where the text configuration header ends."""
     with open(filepath, 'rb') as f:
-        data = f.read(min(600000, f.seek(0, 2) or 600000))
+        f.seek(0, 2)
+        file_size = f.tell()
         f.seek(0)
-        data = f.read(min(600000, len(data)))
+        data = f.read(min(600000, file_size))
 
     for i in range(10000, len(data) - 64):
         window = data[i:i + 64]
@@ -264,6 +265,12 @@ def _find_tt_arrays(filepath: str, max_pings: int | None = None) -> list[int]:
                         # Verify monotonic decrease port→nadir
                         if float(floats[i + 100]) > float(floats[i + 300]) > float(floats[i + 500]):
                             abs_off = chunk_start + i * 4
+                            # Verify all 1024 values are finite and reasonable
+                            window = floats[i:i + 1024]
+                            finite_count = int(np.sum(np.isfinite(window) & (np.abs(window) < 1000)))
+                            if finite_count < 800:
+                                i += 1
+                                continue
                             if not offsets or abs_off - offsets[-1] > _MIN_PING_SPACING:
                                 offsets.append(abs_off)
                                 if max_pings and len(offsets) >= max_pings:

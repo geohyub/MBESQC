@@ -54,26 +54,28 @@ class OffsetValidationResult:
 def _load_om_offsets(db_path: str, config_id: int | None = None,
                      vessel_name: str | None = None) -> dict[str, dict]:
     """Load OffsetManager offsets by config_id or vessel_name."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
 
-    if config_id:
-        rows = conn.execute(
-            "SELECT * FROM sensor_offsets WHERE config_id = ?", (config_id,)
-        ).fetchall()
-    elif vessel_name:
-        config = conn.execute(
-            "SELECT id FROM vessel_configs WHERE vessel_name LIKE ? ORDER BY updated_at DESC LIMIT 1",
-            (f"%{vessel_name}%",)
-        ).fetchone()
-        rows = conn.execute(
-            "SELECT * FROM sensor_offsets WHERE config_id = ?", (config["id"],)
-        ).fetchall() if config else []
-    else:
-        rows = []
+            if config_id is not None:
+                rows = conn.execute(
+                    "SELECT * FROM sensor_offsets WHERE config_id = ?", (config_id,)
+                ).fetchall()
+            elif vessel_name:
+                config = conn.execute(
+                    "SELECT id FROM vessel_configs WHERE vessel_name LIKE ? ORDER BY updated_at DESC LIMIT 1",
+                    (f"%{vessel_name}%",)
+                ).fetchone()
+                rows = conn.execute(
+                    "SELECT * FROM sensor_offsets WHERE config_id = ?", (config["id"],)
+                ).fetchall() if config else []
+            else:
+                rows = []
 
-    conn.close()
-    return {dict(r)["sensor_name"]: dict(r) for r in rows}
+            return {dict(r)["sensor_name"]: dict(r) for r in rows}
+    except Exception:
+        return {}
 
 
 def _match_sensor(pds_name: str, om_offsets: dict[str, dict]) -> str | None:

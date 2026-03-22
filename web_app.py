@@ -23,7 +23,7 @@ from flask import Flask, render_template, jsonify, request, redirect, url_for, f
 sys.path.insert(0, os.path.dirname(__file__))
 
 app = Flask(__name__)
-app.secret_key = "mbesqc-secret-2026"
+app.secret_key = os.environ.get("MBESQC_SECRET", os.urandom(24).hex())
 
 
 @app.template_filter('basename')
@@ -77,12 +77,24 @@ def health():
     return jsonify({"status": "ok", "module": "MBES QC", "port": 5016, "jobs": len(_jobs)})
 
 
+def _validate_pds_path(pds_path: str) -> str | None:
+    """Validate PDS path: must exist and have .pds extension."""
+    if not pds_path:
+        return None
+    resolved = Path(pds_path).resolve()
+    if not resolved.exists():
+        return None
+    if resolved.suffix.lower() != '.pds':
+        return None
+    return str(resolved)
+
+
 @app.route("/api/pds-info", methods=["POST"])
 def api_pds_info():
     """Quick PDS header analysis (no binary parsing)."""
-    pds_path = request.json.get("pds_path", "")
-    if not pds_path or not os.path.exists(pds_path):
-        return jsonify({"error": f"File not found: {pds_path}"}), 400
+    pds_path = _validate_pds_path(request.json.get("pds_path", ""))
+    if not pds_path:
+        return jsonify({"error": "Invalid or missing PDS file path"}), 400
 
     try:
         from pds_toolkit import read_pds_header
@@ -164,10 +176,10 @@ def api_om_configs():
 def api_run_qc():
     """Start QC job in background thread."""
     data = request.json or {}
-    pds_path = data.get("pds_path", "")
+    pds_path = _validate_pds_path(data.get("pds_path", ""))
 
-    if not pds_path or not os.path.exists(pds_path):
-        return jsonify({"error": f"File not found: {pds_path}"}), 400
+    if not pds_path:
+        return jsonify({"error": "Invalid or missing PDS file path"}), 400
 
     job_id = _next_job_id()
     job = {
@@ -252,10 +264,12 @@ def _run_qc_job(job: dict) -> None:
         )
 
         # Serialize result for template
-        job["result"] = _serialize_result(result)
-        job["status"] = "done"
-        job["progress"] = "Complete"
-        job["finished_at"] = datetime.now().isoformat()
+        serialized = _serialize_result(result)
+        with _job_lock:
+            job["result"] = serialized
+            job["finished_at"] = datetime.now().isoformat()
+            job["progress"] = "Complete"
+            job["status"] = "done"  # set LAST so status poll sees complete state
 
     except Exception as e:
         job["status"] = "error"
@@ -336,4 +350,4 @@ def _load_om_configs() -> list[dict]:
 # ── Main ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(port=5016, debug=True)
+    app.run(port=5016, debug=os.environ.get("FLASK_DEBUG", "0") == "1")
