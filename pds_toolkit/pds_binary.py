@@ -202,22 +202,41 @@ def _read_u8_array(data: bytes, offset: int, count: int) -> np.ndarray:
 
 # ── Ping Record Scanner ───────────────────────────────────────
 
+def _find_text_header_end(filepath: str) -> int:
+    """Find where the text configuration header ends."""
+    with open(filepath, 'rb') as f:
+        data = f.read(min(600000, f.seek(0, 2) or 600000))
+        f.seek(0)
+        data = f.read(min(600000, len(data)))
+
+    for i in range(10000, len(data) - 64):
+        window = data[i:i + 64]
+        printable = sum(1 for b in window if 32 <= b <= 126 or b in (10, 13, 9))
+        if printable < 20:
+            return i
+    return 0
+
+
 def _find_tt_arrays(filepath: str, max_pings: int | None = None) -> list[int]:
     """Find all TT array offsets by V-shape detection.
 
     Searches for 1024-element float32 arrays with characteristic V-shape:
     port/stbd edges > nadir center, monotonically decreasing toward center.
     No header signature assumed (varies across vessels).
+    Skips text header area automatically.
     """
     offsets: list[int] = []
     chunk_size = 20 * 1024 * 1024
     overlap = 4200
 
+    # Skip past text header
+    search_start = _find_text_header_end(filepath)
+
     with open(filepath, 'rb') as f:
         f.seek(0, 2)
         file_size = f.tell()
 
-        for chunk_start in range(0, file_size, chunk_size - overlap):
+        for chunk_start in range(search_start, file_size, chunk_size - overlap):
             f.seek(chunk_start)
             read_size = min(chunk_size, file_size - chunk_start)
             if read_size < 4200:
@@ -257,52 +276,43 @@ def _find_tt_arrays(filepath: str, max_pings: int | None = None) -> list[int]:
 
 
 def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
-    """Parse a single ping record from raw bytes."""
+    """Parse a single ping record from raw bytes.
+
+    Uses a two-pass approach:
+    1. Try fixed offsets (fast, works for EDF-type files)
+    2. Fall back to dynamic array detection (slower, works for all files)
+    """
     ping = PdsPing(ping_number=ping_number, file_offset=file_offset)
     data_len = len(data)
+    if data_len < _NUM_BEAMS * 4:
+        return ping
 
-    # Travel Time: detect if header signature [~0.21, 0.0] is present
-    # Some files start directly with beam 0 (no header)
+    # Travel Time: always at the start (possibly with 2 header floats)
     tt_start = 0
     if data_len >= 8:
         hdr0 = struct.unpack_from('<f', data, 0)[0]
         hdr1 = struct.unpack_from('<f', data, 4)[0]
         if 0.1 < hdr0 < 0.5 and abs(hdr1) < 0.01:
-            tt_start = _TT_BEAMS_START  # skip 2 header floats
+            tt_start = _TT_BEAMS_START
     if data_len >= tt_start + _NUM_BEAMS * 4:
         ping.travel_time = _read_f32_array(data, tt_start, _NUM_BEAMS)
 
-    if data_len >= _SAMPLING_RATE_OFFSET + 4:
-        ping.sampling_rate = struct.unpack_from('<f', data, _SAMPLING_RATE_OFFSET)[0]
+    # Try fixed offsets first
+    _try_fixed_offsets(data, ping)
 
-    if data_len >= _QUALITY_OFFSET + _NUM_BEAMS * 4:
-        ping.quality = _read_f32_array(data, _QUALITY_OFFSET, _NUM_BEAMS)
+    # If depth not found via fixed offsets, use dynamic detection
+    if len(ping.depth) == 0 or not np.any(ping.depth != 0):
+        _try_dynamic_detection(data, ping)
 
-    if data_len >= _RX_ANGLE_OFFSET + _NUM_BEAMS * 4:
-        ping.rx_angle = _read_f32_array(data, _RX_ANGLE_OFFSET, _NUM_BEAMS)
-
-    if data_len >= _ALONG_TRACK_OFFSET + _NUM_BEAMS * 4:
-        ping.along_track = _read_f32_array(data, _ALONG_TRACK_OFFSET, _NUM_BEAMS)
-
-    if data_len >= _ACROSS_TRACK_OFFSET + _NUM_BEAMS * 4:
-        ping.across_track = _read_f32_array(data, _ACROSS_TRACK_OFFSET, _NUM_BEAMS)
-
-    if data_len >= _AZIMUTH_OFFSET + 200 * 4:
-        raw_azimuth = _read_f32_array(data, _AZIMUTH_OFFSET, 200)
-        valid = (raw_azimuth > 0) & (raw_azimuth < 360)
-        ping.azimuth = raw_azimuth[valid]
-
-    if data_len >= _DEPTH_OFFSET + _NUM_BEAMS * 4:
-        ping.depth = _read_f32_array(data, _DEPTH_OFFSET, _NUM_BEAMS)
-
-    if data_len >= _BEAM_FLAGS_OFFSET + _NUM_BEAMS:
-        ping.beam_flags = _read_u8_array(data, _BEAM_FLAGS_OFFSET, _NUM_BEAMS)
-
-    if data_len >= _TIMESTAMP_OFFSET + 8:
-        ts = _read_f64(data, _TIMESTAMP_OFFSET)
-        if _is_valid_timestamp(ts):
-            ping.timestamp = ts
-            ping.datetime_utc = _ms_to_datetime(ts)
+    # Search for timestamp at multiple possible offsets
+    if ping.timestamp <= 0:
+        for ts_off in [_TIMESTAMP_OFFSET, data_len - 8, data_len - 16]:
+            if 0 <= ts_off and ts_off + 8 <= data_len:
+                ts = _read_f64(data, ts_off)
+                if _is_valid_timestamp(ts):
+                    ping.timestamp = ts
+                    ping.datetime_utc = _ms_to_datetime(ts)
+                    break
 
     # Set actual valid beam count
     if len(ping.depth) > 0:
@@ -311,6 +321,85 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
         ping.num_beams = int(np.sum(ping.travel_time > 0))
 
     return ping
+
+
+def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
+    """Try reading beam arrays at known fixed offsets (EDF calibrated)."""
+    data_len = len(data)
+
+    if data_len >= _QUALITY_OFFSET + _NUM_BEAMS * 4:
+        arr = _read_f32_array(data, _QUALITY_OFFSET, _NUM_BEAMS)
+        if np.all(np.isfinite(arr)) and np.all(np.abs(arr) < 200):
+            ping.quality = arr
+
+    if data_len >= _RX_ANGLE_OFFSET + _NUM_BEAMS * 4:
+        arr = _read_f32_array(data, _RX_ANGLE_OFFSET, _NUM_BEAMS)
+        if np.all(np.isfinite(arr)) and np.all(arr > 0) and np.all(arr < 2):
+            ping.rx_angle = arr
+
+    if data_len >= _ACROSS_TRACK_OFFSET + _NUM_BEAMS * 4:
+        arr = _read_f32_array(data, _ACROSS_TRACK_OFFSET, _NUM_BEAMS)
+        if np.all(np.isfinite(arr)) and np.all(np.abs(arr) < 500):
+            ping.across_track = arr
+
+    if data_len >= _DEPTH_OFFSET + _NUM_BEAMS * 4:
+        arr = _read_f32_array(data, _DEPTH_OFFSET, _NUM_BEAMS)
+        if np.all(np.isfinite(arr)) and np.all(arr < 0) and np.all(arr > -500):
+            ping.depth = arr
+
+    if data_len >= _TIMESTAMP_OFFSET + 8:
+        ts = _read_f64(data, _TIMESTAMP_OFFSET)
+        if _is_valid_timestamp(ts):
+            ping.timestamp = ts
+            ping.datetime_utc = _ms_to_datetime(ts)
+
+
+def _try_dynamic_detection(data: bytes, ping: PdsPing) -> None:
+    """Dynamically find beam arrays by value patterns."""
+    data_len = len(data)
+    n = data_len // 4
+    if n < _NUM_BEAMS:
+        return
+
+    floats = np.frombuffer(data[:n * 4], dtype='<f4')
+
+    i = _NUM_BEAMS + 10  # skip past TT array
+    while i < n - _NUM_BEAMS:
+        window = floats[i:i + _NUM_BEAMS]
+
+        if not np.all(np.isfinite(window)):
+            i += 1
+            continue
+        if np.any(np.abs(window) > 1e6):
+            i += 1
+            continue
+
+        nonzero = window[window != 0]
+        if len(nonzero) < _NUM_BEAMS * 0.3:
+            i += 1
+            continue
+
+        mn = float(np.min(nonzero))
+        mx = float(np.max(nonzero))
+        std = float(np.std(nonzero))
+        center = float(window[_NUM_BEAMS // 2])
+
+        # Depth: all negative, 1-500m range
+        if len(ping.depth) == 0 and mn < -0.5 and mx < 0 and abs(mn) < 500 and std < 30:
+            ping.depth = window.copy()
+            i += _NUM_BEAMS
+            continue
+
+        # Across-track: sign change, realistic range
+        if len(ping.across_track) == 0 and mn < -5 and mx > 5 and std < 100:
+            left = float(np.mean(window[:50]))
+            right = float(np.mean(window[-50:]))
+            if (left < 0 and right > 0) or (left > 0 and right < 0):
+                ping.across_track = window.copy()
+                i += _NUM_BEAMS
+                continue
+
+        i += 1
 
 
 # ── Navigation Scanner ─────────────────────────────────────────
