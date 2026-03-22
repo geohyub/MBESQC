@@ -66,71 +66,153 @@
     </div>
 </div>
 
-<!-- Recent Results -->
-<div class="card">
-    <div class="card-header">
-        <h3 class="card-title"><i class="ti ti-history me-2 text-cyan"></i>Recent QC Results</h3>
-        <div class="card-actions"><span class="badge bg-cyan">{{ jobs|length }}</span></div>
+<!-- Main Content -->
+<div class="row row-deck row-cards">
+    <!-- Results Table -->
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-history me-2 text-cyan"></i>Recent QC Results</h3>
+                <div class="card-actions"><span class="badge bg-cyan">{{ jobs|length }}</span></div>
+            </div>
+            {% if jobs %}
+            <div class="table-responsive">
+                <table class="table table-vcenter card-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>File</th>
+                            <th>Vessel</th>
+                            <th class="text-center">Pings</th>
+                            <th class="text-center">Depth</th>
+                            <th class="text-center">Pre-Check</th>
+                            <th class="text-center">Time</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for job in jobs %}
+                        {% set r = job.result %}
+                        <tr>
+                            <td>{{ job.id }}</td>
+                            <td><code>{{ job.pds_path | basename }}</code></td>
+                            <td>{{ r.vessel_name if r else '—' }}</td>
+                            <td class="text-center">{{ "{:,}".format(r.total_pings) if r else '—' }}</td>
+                            <td class="text-center">
+                                {% if r and r.depth_range %}
+                                {{ "%.1f"|format(r.depth_range[0]|abs) }}–{{ "%.1f"|format(r.depth_range[1]|abs) }}m
+                                {% else %}—{% endif %}
+                            </td>
+                            <td class="text-center">
+                                {% if r and r.preprocess %}
+                                {% if r.preprocess.overall == 'PASS' %}
+                                <span class="badge bg-green">PASS</span>
+                                {% elif r.preprocess.overall == 'WARNING' %}
+                                <span class="badge bg-yellow">WARN</span>
+                                {% elif r.preprocess.overall == 'FAIL' %}
+                                <span class="badge bg-red">FAIL</span>
+                                {% else %}
+                                <span class="badge bg-secondary">N/A</span>
+                                {% endif %}
+                                {% else %}—{% endif %}
+                            </td>
+                            <td class="text-center text-secondary">{{ "%.1f"|format(r.elapsed_sec) }}s</td>
+                            <td><a href="/qc/{{ job.id }}" class="btn btn-sm btn-outline-cyan">View</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="card-body">
+                <div class="empty">
+                    <div class="empty-icon"><i class="ti ti-3d-cube-sphere"></i></div>
+                    <p class="empty-title">No QC results yet</p>
+                    <p class="empty-subtitle text-secondary">Start by running a QC analysis on a PDS file.</p>
+                    <div class="empty-action">
+                        <a href="/new-qc" class="btn btn-cyan"><i class="ti ti-player-play me-2"></i>New QC</a>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
     </div>
-    {% if jobs %}
-    <div class="table-responsive">
-        <table class="table table-vcenter card-table">
-            <thead>
-                <tr>
-                    <th>#</th>
-                    <th>File</th>
-                    <th>Vessel</th>
-                    <th class="text-center">Pings</th>
-                    <th class="text-center">Depth</th>
-                    <th class="text-center">Pre-Check</th>
-                    <th class="text-center">Time</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for job in jobs %}
-                {% set r = job.result %}
-                <tr>
-                    <td>{{ job.id }}</td>
-                    <td><code>{{ job.pds_path | basename }}</code></td>
-                    <td>{{ r.vessel_name if r else '—' }}</td>
-                    <td class="text-center">{{ "{:,}".format(r.total_pings) if r else '—' }}</td>
-                    <td class="text-center">
-                        {% if r and r.depth_range %}
-                        {{ "%.1f"|format(r.depth_range[0]|abs) }}–{{ "%.1f"|format(r.depth_range[1]|abs) }}m
-                        {% else %}—{% endif %}
-                    </td>
-                    <td class="text-center">
-                        {% if r and r.preprocess %}
-                        {% if r.preprocess.overall == 'PASS' %}
-                        <span class="badge bg-green">PASS</span>
-                        {% elif r.preprocess.overall == 'WARNING' %}
-                        <span class="badge bg-yellow">WARN</span>
-                        {% elif r.preprocess.overall == 'FAIL' %}
-                        <span class="badge bg-red">FAIL</span>
-                        {% else %}
-                        <span class="badge bg-secondary">N/A</span>
-                        {% endif %}
-                        {% else %}—{% endif %}
-                    </td>
-                    <td class="text-center text-secondary">{{ "%.1f"|format(r.elapsed_sec) }}s</td>
-                    <td><a href="/qc/{{ job.id }}" class="btn btn-sm btn-outline-cyan">View</a></td>
-                </tr>
+
+    <!-- Sidebar -->
+    <div class="col-lg-4">
+        <!-- Quick Start -->
+        <div class="card mb-3">
+            <div class="card-body text-center py-4">
+                <div class="mb-3">
+                    <span class="avatar avatar-xl bg-green-lt">
+                        <i class="ti ti-3d-cube-sphere" style="font-size:1.5rem;"></i>
+                    </span>
+                </div>
+                <h3 class="card-title">Quick Start</h3>
+                <p class="text-secondary">
+                    Select a PDS file to run IHO-compliant multibeam QC analysis.
+                </p>
+                <a href="/new-qc" class="btn btn-cyan">
+                    <i class="ti ti-player-play me-1"></i> New QC
+                </a>
+            </div>
+        </div>
+
+        <!-- QC Pipeline -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-git-branch me-2"></i>QC Pipeline</h3>
+            </div>
+            <div class="list-group list-group-flush">
+                {% set pipeline_stages = [
+                    ("ti-upload", "PDS Ingest", "Parse GSF/ALL bathymetry data"),
+                    ("ti-ruler", "Pre-Check", "Beam geometry, depth validation"),
+                    ("ti-chart-bar", "Statistics", "Depth, ping, beam density stats"),
+                    ("ti-map", "Coverage", "Swath coverage & overlap analysis"),
+                    ("ti-trophy", "IHO Grade", "Order 1a/1b/Special compliance"),
+                ] %}
+                {% for icon, name, desc in pipeline_stages %}
+                <div class="list-group-item">
+                    <div class="row align-items-center">
+                        <div class="col-auto">
+                            <span class="avatar avatar-sm bg-green-lt">
+                                <i class="{{ icon }}"></i>
+                            </span>
+                        </div>
+                        <div class="col text-truncate">
+                            <div class="fw-bold">{{ name }}</div>
+                            <div class="text-secondary small">{{ desc }}</div>
+                        </div>
+                    </div>
+                </div>
                 {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}
-    <div class="card-body">
-        <div class="empty">
-            <div class="empty-icon"><i class="ti ti-3d-cube-sphere"></i></div>
-            <p class="empty-title">No QC results yet</p>
-            <p class="empty-subtitle text-secondary">Start by running a QC analysis on a PDS file.</p>
-            <div class="empty-action">
-                <a href="/new-qc" class="btn btn-cyan"><i class="ti ti-player-play me-2"></i>New QC</a>
+            </div>
+        </div>
+
+        <!-- Supported Formats -->
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-file-code me-2"></i>Supported Formats</h3>
+            </div>
+            <div class="card-body">
+                <div class="d-flex flex-column gap-2">
+                    <div class="d-flex align-items-center gap-3 p-2 rounded bg-dark-lt">
+                        <span class="badge bg-green-lt fw-bold" style="min-width:42px;text-align:center;">GSF</span>
+                        <div>
+                            <div class="small fw-bold">Generic Sensor Format</div>
+                            <div class="text-secondary" style="font-size:.75rem;">Standard MBES data format</div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-3 p-2 rounded bg-dark-lt">
+                        <span class="badge bg-cyan-lt fw-bold" style="min-width:42px;text-align:center;">ALL</span>
+                        <div>
+                            <div class="small fw-bold">Kongsberg ALL</div>
+                            <div class="text-secondary" style="font-size:.75rem;">Kongsberg EM series raw data</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    {% endif %}
 </div>
 {% endblock %}
