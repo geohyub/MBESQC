@@ -11,10 +11,14 @@ venv/
 .venv/
 qc_output/
 qc_output_full/
+qc_output_test/
+qc_output_final/
+QC_*/
 examples/*.gsf
 examples/*.s7k
 examples/*.xtf
 examples/*.all
+*.pdf
 reference/*.pdf
 reference/**/*.gsf
 reference/**/*.s7k
@@ -23,4 +27,12 @@ reference/**/*.all
 reference/**/*.fau
 reference/**/*.gpt
 reference/**/*.hvf
+reference/**/*.pds
+reference/**/*.csv
+reference/**/*.txt
+reference/**/*.tiff
+reference/**/*.dxf
+reference/**/*.dxf_rxl
+reference/**/*.nsf
+reference/**/*.log
 *.zip
