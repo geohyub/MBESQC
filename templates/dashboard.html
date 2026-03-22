@@ -66,10 +66,9 @@
     </div>
 </div>
 
-<!-- Main Content -->
-<div class="row row-deck row-cards">
-    <!-- Results Table -->
-    <div class="col-lg-8">
+<!-- Results Table — Full Width -->
+<div class="row row-cards mb-3">
+    <div class="col-12">
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title"><i class="ti ti-history me-2 text-cyan"></i>최근 QC 결과</h3>
@@ -137,11 +136,13 @@
             {% endif %}
         </div>
     </div>
+</div>
 
-    <!-- Sidebar -->
-    <div class="col-lg-4">
+<!-- Quick Start + Pipeline + Formats — 3 equal columns -->
+<div class="row row-deck row-cards">
+    <div class="col-md-4">
         <!-- Quick Start -->
-        <div class="card mb-3">
+        <div class="card">
             <div class="card-body text-center py-4">
                 <div class="mb-3">
                     <span class="avatar avatar-xl bg-green-lt">
@@ -157,9 +158,11 @@
                 </a>
             </div>
         </div>
+    </div>
 
+    <div class="col-md-4">
         <!-- QC Pipeline -->
-        <div class="card mb-3">
+        <div class="card">
             <div class="card-header">
                 <h3 class="card-title"><i class="ti ti-git-branch me-2"></i>QC 파이프라인</h3>
             </div>
@@ -179,7 +182,7 @@
                                 <i class="{{ icon }}"></i>
                             </span>
                         </div>
-                        <div class="col text-truncate">
+                        <div class="col text-break">
                             <div class="fw-bold">{{ name }}</div>
                             <div class="text-secondary small">{{ desc }}</div>
                         </div>
@@ -188,7 +191,9 @@
                 {% endfor %}
             </div>
         </div>
+    </div>
 
+    <div class="col-md-4">
         <!-- Supported Formats -->
         <div class="card">
             <div class="card-header">
