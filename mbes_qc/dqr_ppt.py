@@ -55,7 +55,7 @@ def generate_dqr_ppt(
     prs.slide_height = Inches(7.5)
 
     # Colors
-    NAVY = RGBColor(0x2F, 0x54, 0x96)
+    NAVY = RGBColor(0x1E, 0x3A, 0x5F)
     WHITE = RGBColor(0xFF, 0xFF, 0xFF)
     GRAY = RGBColor(0x80, 0x80, 0x80)
 
@@ -254,7 +254,7 @@ def _add_textbox(slide, text, left, top, width, height,
 
 
 def _add_numbered_header(slide, number, title):
-    NAVY = RGBColor(0x2F, 0x54, 0x96)
+    NAVY = RGBColor(0x1E, 0x3A, 0x5F)
     _add_textbox(slide, title, Inches(0.5), Inches(0.3), Inches(12), Inches(0.8),
                  font_size=28, bold=True, color=NAVY)
     _add_textbox(slide, number, Inches(11.5), Inches(0.3), Inches(1.5), Inches(0.8),

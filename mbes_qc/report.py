@@ -24,6 +24,17 @@ try:
 except ImportError:
     HAS_WORD = False
 
+try:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _shared = _Path(__file__).resolve().parents[2] / "_shared"
+    if _shared.exists() and str(_shared) not in _sys.path:
+        _sys.path.insert(0, str(_shared))
+    from geoview_common.reporting.design_system import WordBuilder, WORD_STYLES
+    HAS_WORDBUILDER = True
+except ImportError:
+    HAS_WORDBUILDER = False
+
 
 # ── Color definitions ───────────────────────────────────────────
 
@@ -40,46 +51,117 @@ def _status_color(status: str) -> str:
 # ── Excel Report ────────────────────────────────────────────────
 
 
-def generate_excel_report(qc_results: dict, output_path: str | Path) -> None:
-    """Generate Excel QC report with one sheet per QC category."""
+def generate_excel_report(
+    qc_results: dict,
+    output_path: str | Path,
+    project_name: str = "",
+    vessel_name: str = "",
+) -> None:
+    """Generate Excel QC report with professional styling."""
     if not HAS_EXCEL:
         print("  [SKIP] openpyxl not installed")
         return
 
     wb = openpyxl.Workbook()
 
-    # Header style
+    # ── Style constants ──
+    NAVY = "1E3A5F"
+    navy_fill = PatternFill("solid", fgColor=NAVY)
     hdr_font = Font(bold=True, size=11, color="FFFFFF")
-    hdr_fill = PatternFill("solid", fgColor="2F5496")
     hdr_align = Alignment(horizontal="center", vertical="center")
+    title_font = Font(bold=True, size=16, color="FFFFFF")
+    title_align = Alignment(horizontal="center", vertical="center")
+    info_label_font = Font(bold=True, size=10, color=NAVY)
+    info_value_font = Font(size=10)
+    data_font = Font(size=10)
+    alt_fill = PatternFill("solid", fgColor="F2F6FA")
+    pass_fill = PatternFill("solid", fgColor="C6EFCE")
+    fail_fill = PatternFill("solid", fgColor="FFC7CE")
+    warn_fill = PatternFill("solid", fgColor="FFEB9C")
+    pass_font = Font(bold=True, size=10, color="006100")
+    fail_font = Font(bold=True, size=10, color="9C0006")
+    warn_font = Font(bold=True, size=10, color="9C6500")
     thin_border = Border(
-        left=Side(style="thin"), right=Side(style="thin"),
-        top=Side(style="thin"), bottom=Side(style="thin")
+        left=Side(style="thin", color="D0D0D0"),
+        right=Side(style="thin", color="D0D0D0"),
+        top=Side(style="thin", color="D0D0D0"),
+        bottom=Side(style="thin", color="D0D0D0"),
     )
 
-    def _add_sheet(name: str, headers: list[str], rows: list[list]) -> None:
+    def _status_style(val: str):
+        """Return (font, fill) for a status value."""
+        if val == "PASS":
+            return pass_font, pass_fill
+        elif val == "FAIL":
+            return fail_font, fail_fill
+        elif val == "WARNING":
+            return warn_font, warn_fill
+        return data_font, None
+
+    def _add_sheet(name: str, headers: list[str], rows: list[list],
+                   start_row: int = 1) -> None:
         ws = wb.create_sheet(name)
+
+        # Header row
         for c, h in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=c, value=h)
+            cell = ws.cell(row=start_row, column=c, value=h)
             cell.font = hdr_font
-            cell.fill = hdr_fill
+            cell.fill = navy_fill
             cell.alignment = hdr_align
             cell.border = thin_border
 
-        for r, row_data in enumerate(rows, 2):
+        # Data rows with alternating fills & status cell coloring
+        for r, row_data in enumerate(rows, start_row + 1):
+            is_alt = (r - start_row) % 2 == 0
             for c, val in enumerate(row_data, 1):
                 cell = ws.cell(row=r, column=c, value=str(val))
                 cell.border = thin_border
-                # Color status cells
+                cell.font = data_font
+                # Alternating row background
+                if is_alt:
+                    cell.fill = alt_fill
+
+                # Status cells: colored fill + bold font
                 if isinstance(val, str) and val in ("PASS", "FAIL", "WARNING"):
-                    cell.font = Font(bold=True, color=_status_color(val))
+                    sfont, sfill = _status_style(val)
+                    cell.font = sfont
+                    if sfill:
+                        cell.fill = sfill
 
         # Auto-width
         for col in ws.columns:
             max_len = max(len(str(cell.value or "")) for cell in col)
             ws.column_dimensions[col[0].column_letter].width = min(50, max(12, max_len + 2))
 
-    # Summary sheet
+        return ws
+
+    # ── Summary sheet ──
+    ws_sum = wb.create_sheet("Summary", 0)
+
+    # Navy title banner (merged A1:F1)
+    ws_sum.merge_cells("A1:F1")
+    title_cell = ws_sum["A1"]
+    title_cell.value = "MBES QC Report"
+    title_cell.font = title_font
+    title_cell.fill = navy_fill
+    title_cell.alignment = title_align
+    ws_sum.row_dimensions[1].height = 36
+
+    # Project info block (rows 3-6)
+    info_items = [
+        ("Project", project_name or "N/A"),
+        ("Vessel", vessel_name or "N/A"),
+        ("Report Date", datetime.datetime.now().strftime("%Y-%m-%d %H:%M")),
+    ]
+    for idx, (label, value) in enumerate(info_items):
+        r = idx + 3
+        lbl_cell = ws_sum.cell(row=r, column=1, value=label)
+        lbl_cell.font = info_label_font
+        val_cell = ws_sum.cell(row=r, column=2, value=value)
+        val_cell.font = info_value_font
+
+    # QC Results header
+    qc_start_row = len(info_items) + 4
     summary_rows = []
     overall = "PASS"
     for category, result in qc_results.items():
@@ -91,9 +173,12 @@ def generate_excel_report(qc_results: dict, output_path: str | Path) -> None:
             for i in (result.items if isinstance(result.items, list) else []):
                 s = i.get("status", "N/A") if isinstance(i, dict) else getattr(i, "status", "N/A")
                 vs.append(s)
-            if "FAIL" in vs: verdict = "FAIL"
-            elif "WARNING" in vs: verdict = "WARNING"
-            elif vs: verdict = "PASS"
+            if "FAIL" in vs:
+                verdict = "FAIL"
+            elif "WARNING" in vs:
+                verdict = "WARNING"
+            elif vs:
+                verdict = "PASS"
 
         summary_rows.append([category, verdict])
         if verdict == "FAIL":
@@ -102,9 +187,34 @@ def generate_excel_report(qc_results: dict, output_path: str | Path) -> None:
             overall = "WARNING"
 
     summary_rows.insert(0, ["OVERALL", overall])
-    _add_sheet("Summary", ["Category", "Verdict"], summary_rows)
 
-    # Detail sheets per category
+    # Write summary table headers
+    for c, h in enumerate(["Category", "Verdict"], 1):
+        cell = ws_sum.cell(row=qc_start_row, column=c, value=h)
+        cell.font = hdr_font
+        cell.fill = navy_fill
+        cell.alignment = hdr_align
+        cell.border = thin_border
+
+    # Write summary data
+    for r_idx, row_data in enumerate(summary_rows, qc_start_row + 1):
+        is_alt = (r_idx - qc_start_row) % 2 == 0
+        for c, val in enumerate(row_data, 1):
+            cell = ws_sum.cell(row=r_idx, column=c, value=str(val))
+            cell.border = thin_border
+            cell.font = data_font
+            if is_alt:
+                cell.fill = alt_fill
+            if isinstance(val, str) and val in ("PASS", "FAIL", "WARNING"):
+                sfont, sfill = _status_style(val)
+                cell.font = sfont
+                if sfill:
+                    cell.fill = sfill
+
+    ws_sum.column_dimensions["A"].width = 25
+    ws_sum.column_dimensions["B"].width = 20
+
+    # ── Detail sheets per category ──
     for category, result in qc_results.items():
         items = []
         if hasattr(result, "items"):
@@ -135,57 +245,75 @@ def generate_word_report(
     project_name: str = "",
     vessel_name: str = "",
 ) -> None:
-    """Generate Word QC report."""
-    if not HAS_WORD:
-        print("  [SKIP] python-docx not installed")
+    """Generate Word QC report using GeoView design system."""
+    if not HAS_WORDBUILDER:
+        if not HAS_WORD:
+            print("  [SKIP] python-docx not installed")
+            return
+        # Fallback: minimal raw-docx report
+        _generate_word_report_fallback(qc_results, output_path, project_name, vessel_name)
         return
 
-    doc = Document()
+    wb = WordBuilder(WORD_STYLES["geoview_report"])
 
-    # Title
-    title = doc.add_heading("MBES QC Report", level=0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # ── Cover Page ──
+    wb.cover(
+        title="MBES QC Report",
+        subtitle="Multi-Beam Echo Sounder Quality Control",
+        meta=f"Project: {project_name or 'N/A'}  |  "
+             f"Vessel: {vessel_name or 'N/A'}  |  "
+             f"Date: {datetime.datetime.now():%Y-%m-%d}",
+    )
+    wb.setup_page_footer("MBES QC Report")
+    wb.page_break()
 
-    # Info table
-    p = doc.add_paragraph()
-    p.add_run(f"Project: ").bold = True
-    p.add_run(project_name or "N/A")
-    p = doc.add_paragraph()
-    p.add_run(f"Vessel: ").bold = True
-    p.add_run(vessel_name or "N/A")
-    p = doc.add_paragraph()
-    p.add_run(f"Date: ").bold = True
-    p.add_run(datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    # ── 1. Project Information ──
+    wb.reset_numbering()
+    wb.heading("Project Information", level=1)
+    wb.kv_table([
+        ("Project", project_name or "N/A"),
+        ("Vessel", vessel_name or "N/A"),
+        ("Report Date", datetime.datetime.now().strftime("%Y-%m-%d %H:%M")),
+    ])
 
-    doc.add_paragraph()
+    # ── 2. QC Summary ──
+    wb.heading("QC Summary", level=1)
 
-    # Summary table
-    doc.add_heading("QC Summary", level=1)
-    table = doc.add_table(rows=1, cols=2, style="Table Grid")
-    table.rows[0].cells[0].text = "Category"
-    table.rows[0].cells[1].text = "Verdict"
-
-    for cell in table.rows[0].cells:
-        for paragraph in cell.paragraphs:
-            for run in paragraph.runs:
-                run.font.bold = True
-
+    summary_rows = []
+    overall = "PASS"
     for category, result in qc_results.items():
         verdict = "N/A"
         if hasattr(result, "overall_verdict"):
             verdict = result.overall_verdict
+        elif hasattr(result, "items"):
+            vs = []
+            for i in (result.items if isinstance(result.items, list) else []):
+                s = i.get("status", "N/A") if isinstance(i, dict) else getattr(i, "status", "N/A")
+                vs.append(s)
+            if "FAIL" in vs:
+                verdict = "FAIL"
+            elif "WARNING" in vs:
+                verdict = "WARNING"
+            elif vs:
+                verdict = "PASS"
 
-        row = table.add_row()
-        row.cells[0].text = category
-        run = row.cells[1].paragraphs[0].add_run(verdict)
-        run.font.bold = True
-        color_map = {"PASS": RGBColor(0, 176, 80), "FAIL": RGBColor(255, 0, 0),
-                     "WARNING": RGBColor(255, 192, 0)}
-        run.font.color.rgb = color_map.get(verdict, RGBColor(128, 128, 128))
+        summary_rows.append([category, verdict])
+        if verdict == "FAIL":
+            overall = "FAIL"
+        elif verdict == "WARNING" and overall == "PASS":
+            overall = "WARNING"
 
-    # Detail sections
+    summary_rows.insert(0, ["OVERALL", overall])
+    wb.table(
+        headers=["Category", "Verdict"],
+        rows=summary_rows,
+    )
+
+    # ── 3. Detailed Results ──
+    wb.heading("Detailed Results", level=1)
+
     for category, result in qc_results.items():
-        doc.add_heading(category, level=2)
+        wb.heading(category, level=2)
 
         items = []
         if hasattr(result, "items"):
@@ -196,19 +324,42 @@ def generate_word_report(
                     items.append({"name": i.name, "status": i.status, "detail": i.detail})
 
         if items:
-            table = doc.add_table(rows=1, cols=3, style="Table Grid")
-            for j, h in enumerate(["Check", "Status", "Detail"]):
-                table.rows[0].cells[j].text = h
-                for paragraph in table.rows[0].cells[j].paragraphs:
-                    for run in paragraph.runs:
-                        run.font.bold = True
-
+            detail_rows = []
             for item in items:
-                row = table.add_row()
-                row.cells[0].text = item.get("name", "")
-                row.cells[1].text = item.get("status", "")
-                row.cells[2].text = item.get("detail", "")
+                detail_rows.append([
+                    item.get("name", ""),
+                    item.get("status", ""),
+                    item.get("detail", ""),
+                ])
+            wb.table(
+                headers=["Check", "Status", "Detail"],
+                rows=detail_rows,
+            )
+        else:
+            wb.body_text("No detailed check items available for this category.")
 
+    wb.doc.save(str(output_path))
+
+
+def _generate_word_report_fallback(
+    qc_results: dict, output_path: str | Path,
+    project_name: str, vessel_name: str,
+) -> None:
+    """Minimal fallback Word report when WordBuilder is unavailable."""
+    doc = Document()
+    title = doc.add_heading("MBES QC Report", level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p = doc.add_paragraph()
+    p.add_run("Project: ").bold = True
+    p.add_run(project_name or "N/A")
+    p = doc.add_paragraph()
+    p.add_run("Vessel: ").bold = True
+    p.add_run(vessel_name or "N/A")
+    p = doc.add_paragraph()
+    p.add_run("Date: ").bold = True
+    p.add_run(datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    for category, result in qc_results.items():
+        doc.add_heading(category, level=2)
     doc.save(str(output_path))
 
 
