@@ -92,6 +92,8 @@ class PdsPing:
     beam_flags: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.uint8))
     azimuth: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
+    backscatter: np.ndarray = field(default_factory=lambda: np.zeros(0))
+
     sampling_rate: float = 0.0
     num_beams: int = 0  # actual valid beams (updated after parsing)
     file_offset: int = 0
@@ -343,6 +345,13 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
         arr = _read_f32_array(data, _RX_ANGLE_OFFSET, _NUM_BEAMS)
         if np.all(np.isfinite(arr)) and np.all(arr > 0) and np.all(arr < 2):
             ping.rx_angle = arr
+
+    # Backscatter at +65628 (confirmed for EDF/JAKO/Sinan)
+    _BACKSCATTER_OFFSET = 65628
+    if data_len >= _BACKSCATTER_OFFSET + _NUM_BEAMS * 4:
+        arr = _read_f32_array(data, _BACKSCATTER_OFFSET, _NUM_BEAMS)
+        if np.all(np.isfinite(arr)) and np.all(arr >= 0) and np.all(arr < 100000):
+            ping.backscatter = arr
 
     if data_len >= _ACROSS_TRACK_OFFSET + _NUM_BEAMS * 4:
         arr = _read_f32_array(data, _ACROSS_TRACK_OFFSET, _NUM_BEAMS)
