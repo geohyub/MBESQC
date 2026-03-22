@@ -332,6 +332,35 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
                 ping.datetime_utc = _ms_to_datetime(ts)
                 break
 
+    # Fallback: compute depth from TT if no depth array found
+    if (len(ping.depth) == 0 or not np.any(ping.depth != 0)) and len(ping.travel_time) > 0:
+        tt = ping.travel_time
+        valid = tt > 0
+        if np.sum(valid) > 100:
+            _DEFAULT_SV = 1500.0  # m/s fallback sound velocity
+            # Simple vertical depth: depth = TT(ms) * c / 2 / 1000
+            depth_approx = tt * _DEFAULT_SV / 2.0 / 1000.0
+            ping.depth = -depth_approx  # negative = below surface
+            ping._depth_source = 'computed_from_tt'
+
+    # Fallback: compute across-track from depth + TT (no beam angle needed)
+    if (len(ping.across_track) == 0 or not np.any(ping.across_track != 0)):
+        if len(ping.depth) > 0 and len(ping.travel_time) > 0:
+            tt = ping.travel_time
+            d = np.abs(ping.depth)
+            valid = (tt > 0) & (d > 0)
+            if np.sum(valid) > 100:
+                _DEFAULT_SV = 1500.0
+                slant = tt * _DEFAULT_SV / 2.0 / 1000.0
+                # across = sqrt(slant^2 - depth^2), with sign from beam position
+                sq_diff = slant ** 2 - d ** 2
+                sq_diff = np.maximum(sq_diff, 0)
+                across = np.sqrt(sq_diff)
+                # Port side (first half) = negative, stbd = positive
+                across[:_NUM_BEAMS // 2] *= -1
+                ping.across_track = across
+                ping._across_source = 'computed_from_tt_depth'
+
     # Set actual valid beam count
     if len(ping.depth) > 0:
         ping.num_beams = int(np.sum(ping.depth != 0))
