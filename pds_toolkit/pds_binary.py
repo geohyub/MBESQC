@@ -313,11 +313,20 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
     if len(ping.depth) == 0 or not np.any(ping.depth != 0):
         _try_dynamic_detection(data, ping)
 
-    # Search for timestamp: try known offsets across different file layouts
+    # Search for timestamp: try known offsets first, then full scan
     _TS_OFFSETS = [_TIMESTAMP_OFFSET, 61528, 44968, 2744, 1308]
     for ts_off in _TS_OFFSETS:
         if 0 <= ts_off and ts_off + 8 <= data_len:
             ts = _read_f64(data, ts_off)
+            if _is_valid_timestamp(ts):
+                ping.timestamp = ts
+                ping.datetime_utc = _ms_to_datetime(ts)
+                break
+
+    # Fallback: scan entire ping for valid timestamps
+    if ping.timestamp == 0:
+        for off in range(0, min(data_len - 8, 150000), 4):
+            ts = _read_f64(data, off)
             if _is_valid_timestamp(ts):
                 ping.timestamp = ts
                 ping.datetime_utc = _ms_to_datetime(ts)
@@ -422,14 +431,21 @@ def _try_dynamic_detection(data: bytes, ping: PdsPing) -> None:
                 i += _NUM_BEAMS
                 continue
 
-        # Across-track: sign change, realistic range
-        if len(ping.across_track) == 0 and mn < -5 and mx > 5 and std < 100:
-            left = float(np.mean(window[:50]))
-            right = float(np.mean(window[-50:]))
-            if (left < 0 and right > 0) or (left > 0 and right < 0):
-                ping.across_track = window.copy()
-                i += _NUM_BEAMS
-                continue
+        # Across-track: sign change, realistic range (max ~500m swath per side)
+        if (len(ping.across_track) == 0 and mn < -5 and mx > 5
+                and mn > -500 and mx < 500 and std < 200):
+            # Use non-zero portions for sign check (handles partial swath)
+            left_nz = window[:_NUM_BEAMS // 2]
+            left_nz = left_nz[left_nz != 0]
+            right_nz = window[_NUM_BEAMS // 2:]
+            right_nz = right_nz[right_nz != 0]
+            if len(left_nz) > 50 and len(right_nz) > 50:
+                left_m = float(np.mean(left_nz))
+                right_m = float(np.mean(right_nz))
+                if (left_m < 0 and right_m > 0) or (left_m > 0 and right_m < 0):
+                    ping.across_track = window.copy()
+                    i += _NUM_BEAMS
+                    continue
 
         i += 1
 
