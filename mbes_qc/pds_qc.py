@@ -54,85 +54,152 @@ class PdsQcResult:
         return "N/A"
 
 
-def _find_companion_files(pds_path: Path) -> dict:
-    """Find related GSF, HVF, S7K files near the PDS file."""
+def _extract_timestamp_key(filename: str) -> str | None:
+    """Extract YYYYMMDD-HHMMSS or similar from PDS/GSF filename for matching."""
+    stem = Path(filename).stem
+    parts = stem.replace('_', '-').split('-')
+    # Find 8-digit date part
+    for i, p in enumerate(parts):
+        if len(p) == 8 and p.isdigit():
+            # Also grab the next part if it looks like time (6 digits)
+            if i + 1 < len(parts) and len(parts[i + 1]) == 6 and parts[i + 1].isdigit():
+                return f"{p}-{parts[i + 1]}"
+            return p
+    return None
+
+
+def _find_companion_files(
+    pds_path: Path,
+    gsf_dir: Path | None = None,
+    hvf_dir: Path | None = None,
+    s7k_dir: Path | None = None,
+) -> dict:
+    """Find related GSF, HVF, S7K files by searching specified directories.
+
+    Matching priority:
+    1. Same timestamp (YYYYMMDD-HHMMSS) → exact line match
+    2. Same date (YYYYMMDD) → same survey day
+    3. Same directory → any file of that type
+    """
     result = {'gsf': [], 'hvf': [], 's7k': [], 'pds': []}
 
-    # Same directory
-    pds_dir = pds_path.parent
-    stem = pds_path.stem
+    pds_key = _extract_timestamp_key(pds_path.name)
+    pds_date = pds_key[:8] if pds_key else None
 
-    # Extract timestamp from PDS filename (e.g., EDFR-20251003-220225)
-    # Common pattern: *-YYYYMMDD-HHMMSS.pds
-    parts = stem.split('-')
-    date_part = None
-    for p in parts:
-        if len(p) == 8 and p.isdigit():
-            date_part = p
-            break
+    # Build search directories
+    search_dirs = {
+        'gsf': [],
+        'hvf': [],
+        's7k': [],
+        'pds': [pds_path.parent],
+    }
 
-    # Search same directory and parent
-    search_dirs = [pds_dir]
-    if pds_dir.parent != pds_dir:
-        search_dirs.append(pds_dir.parent)
-        # Common project structures
-        for subdir in ['GSF', 'MBES', 'HVF', 'Vessels', 'S7K']:
-            candidate = pds_dir.parent / subdir
+    # User-specified directories take priority
+    if gsf_dir:
+        search_dirs['gsf'].insert(0, Path(gsf_dir))
+    if hvf_dir:
+        search_dirs['hvf'].insert(0, Path(hvf_dir))
+    if s7k_dir:
+        search_dirs['s7k'].insert(0, Path(s7k_dir))
+
+    # Auto-discover: same directory + parent + common subdirectories
+    auto_dirs = [pds_path.parent]
+    if pds_path.parent.parent != pds_path.parent:
+        auto_dirs.append(pds_path.parent.parent)
+        for subdir_name in ['GSF', 'MBES', 'HVF', 'Vessels', 'S7K', 'RAW',
+                            'EDF_GSF', 'EDF_VESSELS', 'EDF_RAW']:
+            candidate = pds_path.parent.parent / subdir_name
             if candidate.exists():
-                search_dirs.append(candidate)
+                auto_dirs.append(candidate)
 
-    for d in search_dirs:
-        if not d.exists():
-            continue
-        for f in d.iterdir():
-            if not f.is_file():
+    for fmt in ['gsf', 'hvf', 's7k']:
+        for d in auto_dirs:
+            if d not in search_dirs[fmt]:
+                search_dirs[fmt].append(d)
+
+    # Scan each directory
+    ext_map = {'.gsf': 'gsf', '.hvf': 'hvf', '.s7k': 's7k', '.pds': 'pds'}
+
+    for fmt, dirs in search_dirs.items():
+        for d in dirs:
+            if not d.exists():
                 continue
-            ext = f.suffix.lower()
-            if ext == '.gsf':
-                # Match by date if available
-                if date_part and date_part in f.stem:
-                    result['gsf'].insert(0, f)  # prioritize matching date
-                else:
-                    result['gsf'].append(f)
-            elif ext == '.hvf':
-                result['hvf'].append(f)
-            elif ext == '.s7k':
-                if date_part and date_part in f.stem:
-                    result['s7k'].insert(0, f)
-                else:
-                    result['s7k'].append(f)
-            elif ext == '.pds' and f != pds_path:
-                result['pds'].append(f)
+            try:
+                for f in sorted(d.iterdir()):
+                    if not f.is_file():
+                        continue
+                    ext = f.suffix.lower()
+                    target_fmt = ext_map.get(ext)
+                    if target_fmt != fmt:
+                        continue
+                    if fmt == 'pds' and f == pds_path:
+                        continue
+
+                    file_key = _extract_timestamp_key(f.name)
+
+                    # Priority scoring
+                    if pds_key and file_key == pds_key:
+                        result[fmt].insert(0, f)  # exact timestamp match
+                    elif pds_date and file_key and file_key.startswith(pds_date):
+                        # Same date — insert after exact matches but before others
+                        exact_count = sum(1 for x in result[fmt]
+                                          if _extract_timestamp_key(x.name) == pds_key)
+                        result[fmt].insert(exact_count, f)
+                    else:
+                        result[fmt].append(f)
+            except PermissionError:
+                continue
+
+    # Deduplicate
+    for fmt in result:
+        seen = set()
+        unique = []
+        for f in result[fmt]:
+            if f not in seen:
+                seen.add(f)
+                unique.append(f)
+        result[fmt] = unique
 
     return result
 
 
 def run_pds_qc(
     pds_path: str | Path,
+    gsf_dir: str | Path | None = None,
+    hvf_dir: str | Path | None = None,
+    s7k_dir: str | Path | None = None,
     output_dir: str | Path | None = None,
     max_pings: int | None = None,
     offsetmanager_db: str | Path | None = None,
     lat_range: tuple[float, float] = (-90.0, 90.0),
     lon_range: tuple[float, float] = (-180.0, 180.0),
-    use_companion_gsf: bool = True,
     cell_size: float = 5.0,
     generate_reports: bool = True,
 ) -> PdsQcResult:
     """Run complete QC from a single PDS file.
 
-    Automatically finds companion GSF/HVF files in the same directory.
+    Specify data directories and the tool auto-matches files by timestamp.
     Falls back to PDS-only analysis if no GSF is available.
 
     Args:
         pds_path: Path to any .pds file.
-        output_dir: Output directory (default: creates next to PDS file).
+        gsf_dir: Directory containing GSF files (auto-matched by timestamp).
+        hvf_dir: Directory containing HVF vessel files.
+        s7k_dir: Directory containing S7K raw files.
+        output_dir: Output directory (default: QC_{pds_stem}/ next to PDS).
         max_pings: Limit pings per file (None = all).
         offsetmanager_db: Path to OffsetManager SQLite DB.
         lat_range: Latitude range for navigation search.
         lon_range: Longitude range for navigation search.
-        use_companion_gsf: If True, look for matching GSF files.
         cell_size: Grid cell size in metres.
         generate_reports: Generate Excel/Word/PPT reports.
+
+    Example:
+        run_pds_qc(
+            "EDFR-20251003-220225.pds",
+            gsf_dir="E:/project/GSF",
+            hvf_dir="E:/project/Vessels",
+        )
     """
     t0 = time.time()
     pds_path = Path(pds_path)
@@ -188,7 +255,12 @@ def run_pds_qc(
     result.lon_range = pds.lon_range
 
     # ── 3. Find Companion Files ───────────────────────────
-    companions = _find_companion_files(pds_path)
+    companions = _find_companion_files(
+        pds_path,
+        gsf_dir=Path(gsf_dir) if gsf_dir else None,
+        hvf_dir=Path(hvf_dir) if hvf_dir else None,
+        s7k_dir=Path(s7k_dir) if s7k_dir else None,
+    )
     _header("3. Companion Files")
     print(f"  GSF: {len(companions['gsf'])} files")
     print(f"  HVF: {len(companions['hvf'])} files")
@@ -199,7 +271,7 @@ def run_pds_qc(
     _header("4. Loading Swath Data")
 
     # Primary: use GSF if available (more complete data)
-    if use_companion_gsf and companions['gsf']:
+    if companions['gsf']:
         for gsf_path in companions['gsf'][:10]:  # max 10 lines
             try:
                 gsf = read_gsf(str(gsf_path), max_pings=max_pings,
