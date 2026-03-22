@@ -384,17 +384,40 @@ def _try_dynamic_detection(data: bytes, ping: PdsPing) -> None:
         std = float(np.std(nonzero))
         center = float(window[_NUM_BEAMS // 2])
 
-        # Depth: all negative, 1-500m range
+        # Depth (negative): all < 0, range 1-500m
         if len(ping.depth) == 0 and mn < -0.5 and mx < 0 and abs(mn) < 500 and std < 30:
             ping.depth = window.copy()
             i += _NUM_BEAMS
             continue
+
+        # Depth (positive): all > 0, range 1-500m
+        # May be U-shape (edges > center for corrected depth)
+        # or flat-ish (similar values across all beams)
+        if len(ping.depth) == 0 and mn > 0.5 and mx < 500 and std > 1 and std < 50:
+            # Verify it's not just TT values by checking range differs from TT
+            if len(ping.travel_time) > 0:
+                tt_center = float(ping.travel_time[_NUM_BEAMS // 2])
+                if abs(center - tt_center) > 2:  # different from TT nadir
+                    ping.depth = -window.copy()
+                    i += _NUM_BEAMS
+                    continue
+            else:
+                ping.depth = -window.copy()
+                i += _NUM_BEAMS
+                continue
 
         # Across-track: sign change, realistic range
         if len(ping.across_track) == 0 and mn < -5 and mx > 5 and std < 100:
             left = float(np.mean(window[:50]))
             right = float(np.mean(window[-50:]))
             if (left < 0 and right > 0) or (left > 0 and right < 0):
+                ping.across_track = window.copy()
+                i += _NUM_BEAMS
+                continue
+
+        # Across-track: all negative (port side only) with decreasing values
+        if len(ping.across_track) == 0 and mn < -5 and mx < 1 and std > 5:
+            if float(window[0]) < float(window[_NUM_BEAMS // 2]):
                 ping.across_track = window.copy()
                 i += _NUM_BEAMS
                 continue
