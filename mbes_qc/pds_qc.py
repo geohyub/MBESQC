@@ -118,7 +118,16 @@ def _find_companion_files(
                 search_dirs[fmt].append(d)
 
     # Scan each directory
-    ext_map = {'.gsf': 'gsf', '.hvf': 'hvf', '.s7k': 's7k', '.pds': 'pds'}
+    ext_map = {
+        '.gsf': 'gsf', '.hvf': 'hvf', '.s7k': 's7k', '.pds': 'pds',
+        '.xtf': 'xtf', '.fau': 'fau', '.gpt': 'gpt',
+        '.csv': 'csv', '.tiff': 'tiff', '.tif': 'tiff',
+        '.dxf': 'dxf', '.nsf': 'nsf',
+    }
+
+    # Extend result dict for all formats
+    for fmt in ext_map.values():
+        result.setdefault(fmt, [])
 
     for fmt, dirs in search_dirs.items():
         for d in dirs:
@@ -282,11 +291,16 @@ def run_pds_qc(
             except Exception as e:
                 print(f"  GSF SKIP: {gsf_path.name} ({e})")
 
-    # Fallback: use PDS binary pings
+    # Fallback: use PDS binary pings directly
     if not result.swath_lines and pds.pings:
         swath = pds_to_swath(pds)
         result.swath_lines.append(swath)
-        print(f"  PDS: {pds_path.name} ({swath.num_pings} pings)")
+        print(f"  PDS: {pds_path.name} ({swath.num_pings} pings, PDS-only mode)")
+
+    # Load additional companion formats for enrichment
+    for fmt, label in [('fau', 'FAU'), ('xtf', 'XTF'), ('gpt', 'GPT')]:
+        if companions.get(fmt):
+            print(f"  {label}: {len(companions[fmt])} files available")
 
     total_beams = 0
     for sw in result.swath_lines:
@@ -295,9 +309,9 @@ def run_pds_qc(
     result.total_beams = total_beams
     print(f"  Total: {len(result.swath_lines)} lines, {sum(s.num_pings for s in result.swath_lines)} pings, {total_beams:,} beams")
 
-    # ── 5. Post-Processing QC (if GSF available) ─────────
-    if result.swath_lines and companions['gsf']:
-        gsf_objects = []
+    # ── 5. Post-Processing QC ────────────────────────────
+    gsf_objects = []
+    if companions.get('gsf'):
         for gsf_path in companions['gsf'][:10]:
             try:
                 gsf = read_gsf(str(gsf_path), max_pings=max_pings,
@@ -306,41 +320,61 @@ def run_pds_qc(
             except:
                 pass
 
-        if gsf_objects:
-            gsf_main = gsf_objects[0]
+    if gsf_objects:
+        gsf_main = gsf_objects[0]
 
-            # Motion QC
-            _header("5a. Motion QC")
-            from .motion_qc import run_motion_qc
-            motion = run_motion_qc(gsf_main)
-            print(f"  Samples: {motion.total_samples:,} ({motion.time_span_sec:.0f}s)")
-            for ax in [motion.roll, motion.pitch, motion.heave, motion.heading]:
-                print(f"  {ax.name:>8s}: mean={ax.mean:+8.4f}{ax.unit} std={ax.std:7.4f} [{ax.verdict}]")
+        # Motion QC (from GSF attitude)
+        _header("5a. Motion QC (GSF)")
+        from .motion_qc import run_motion_qc
+        motion = run_motion_qc(gsf_main)
+        print(f"  Samples: {motion.total_samples:,} ({motion.time_span_sec:.0f}s)")
+        for ax in [motion.roll, motion.pitch, motion.heave, motion.heading]:
+            print(f"  {ax.name:>8s}: mean={ax.mean:+8.4f}{ax.unit} std={ax.std:7.4f} [{ax.verdict}]")
 
-            # Offset QC
-            _header("5b. Offset QC")
-            from .offset_qc import run_offset_qc
-            hvf = read_hvf(str(companions['hvf'][0])) if companions['hvf'] else None
-            offset = run_offset_qc(gsf_main, hvf)
-            print(f"  Roll Bias: {offset.roll_bias_deg:+.4f} +/- {offset.roll_bias_std:.4f} deg [{offset.roll_verdict}]")
+        # Offset QC
+        _header("5b. Offset QC")
+        from .offset_qc import run_offset_qc
+        hvf = read_hvf(str(companions['hvf'][0])) if companions.get('hvf') else None
+        offset = run_offset_qc(gsf_main, hvf)
+        print(f"  Roll Bias: {offset.roll_bias_deg:+.4f} +/- {offset.roll_bias_std:.4f} deg [{offset.roll_verdict}]")
 
-            # Coverage
-            if len(gsf_objects) >= 2:
-                _header("5c. Coverage")
-                from .coverage_qc import run_coverage_qc
-                cov = run_coverage_qc(gsf_objects)
-                print(f"  Lines: {cov.total_lines}, Length: {cov.total_length_km:.1f} km")
+        # Coverage
+        if len(gsf_objects) >= 2:
+            _header("5c. Coverage")
+            from .coverage_qc import run_coverage_qc
+            cov = run_coverage_qc(gsf_objects)
+            print(f"  Lines: {cov.total_lines}, Length: {cov.total_length_km:.1f} km")
 
-            # Surface generation
-            if generate_reports:
-                _header("5d. Surface Generation")
-                from .surface_builder import build_surfaces_from_gsf
-                surf_dir = out / "surfaces"
-                surface = build_surfaces_from_gsf(gsf_main, cell_size, surf_dir)
-                if surface.dtm is not None:
-                    v = surface.dtm[~np.isnan(surface.dtm)]
-                    if len(v) > 0:
-                        print(f"  DTM: {v.min():.2f} ~ {v.max():.2f} m ({surface.nx}x{surface.ny} grid)")
+        # Surface generation
+        if generate_reports:
+            _header("5d. Surface Generation")
+            from .surface_builder import build_surfaces_from_gsf
+            surf_dir = out / "surfaces"
+            surface = build_surfaces_from_gsf(gsf_main, cell_size, surf_dir)
+            if surface.dtm is not None:
+                v = surface.dtm[~np.isnan(surface.dtm)]
+                if len(v) > 0:
+                    print(f"  DTM: {v.min():.2f} ~ {v.max():.2f} m ({surface.nx}x{surface.ny} grid)")
+
+    elif pds.attitude:
+        # PDS-only Motion QC (from Type 8 attitude records)
+        _header("5a. Motion QC (PDS attitude, limited)")
+        att = pds.attitude
+        pitches = np.array([a.pitch for a in att])
+        rolls = np.array([a.roll for a in att])
+        heaves = np.array([a.heave for a in att])
+        headings = np.array([a.heading for a in att])
+
+        print(f"  Attitude records: {len(att)} (PDS Type 8, ~1Hz)")
+        print(f"  Pitch:   mean={pitches.mean():+.4f} std={pitches.std():.4f} deg")
+        print(f"  Roll:    mean={rolls.mean():+.4f} std={rolls.std():.4f} deg")
+        print(f"  Heading: mean={headings.mean():.1f} std={headings.std():.1f} deg")
+        print(f"  Heave:   mean={heaves.mean():+.4f} std={heaves.std():.4f} m")
+        print(f"  Note: PDS attitude uses MRU device frame (axes may differ from GSF)")
+
+    else:
+        _header("5. Post-Processing QC")
+        print(f"  No GSF or PDS attitude data available for motion QC.")
 
     # ── Summary ───────────────────────────────────────────
     result.elapsed_sec = time.time() - t0
