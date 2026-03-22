@@ -313,15 +313,15 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
     if len(ping.depth) == 0 or not np.any(ping.depth != 0):
         _try_dynamic_detection(data, ping)
 
-    # Search for timestamp at multiple possible offsets
-    if ping.timestamp <= 0:
-        for ts_off in [_TIMESTAMP_OFFSET, data_len - 8, data_len - 16]:
-            if 0 <= ts_off and ts_off + 8 <= data_len:
-                ts = _read_f64(data, ts_off)
-                if _is_valid_timestamp(ts):
-                    ping.timestamp = ts
-                    ping.datetime_utc = _ms_to_datetime(ts)
-                    break
+    # Search for timestamp: try known offsets, then duplicate-pair detection
+    _TS_OFFSETS = [_TIMESTAMP_OFFSET, 61528, 44968]
+    for ts_off in _TS_OFFSETS:
+        if 0 <= ts_off and ts_off + 8 <= data_len:
+            ts = _read_f64(data, ts_off)
+            if _is_valid_timestamp(ts):
+                ping.timestamp = ts
+                ping.datetime_utc = _ms_to_datetime(ts)
+                break
 
     # Set actual valid beam count
     if len(ping.depth) > 0:
