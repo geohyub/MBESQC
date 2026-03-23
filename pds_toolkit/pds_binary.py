@@ -418,15 +418,18 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
             ping.backscatter = arr
 
     # Across-track: try multiple known offsets
-    _ACROSS_OFFSETS = [_ACROSS_TRACK_OFFSET, 61440]
+    _ACROSS_OFFSETS = [_ACROSS_TRACK_OFFSET, 61440, 135168, 170632]
     for a_off in _ACROSS_OFFSETS:
         if len(ping.across_track) > 0 and np.any(ping.across_track != 0):
             break
         if data_len >= a_off + _NUM_BEAMS * 4:
             arr = _read_f32_array(data, a_off, _NUM_BEAMS)
             finite = arr[np.isfinite(arr)]
-            nz = finite[finite != 0]
-            if len(nz) > _NUM_BEAMS * 0.3 and np.all(np.abs(finite) < 500):
+            # Real across-track has significant values (>1m) on both port and stbd
+            sig = finite[np.abs(finite) > 1.0]
+            has_neg = np.any(finite < -1.0)
+            has_pos = np.any(finite > 1.0)
+            if len(sig) > _NUM_BEAMS * 0.2 and has_neg and has_pos and np.all(np.abs(finite) < 500):
                 ping.across_track = arr
                 break
 
