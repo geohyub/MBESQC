@@ -298,6 +298,24 @@
             </div>
         </div>
     </div>
+    <!-- Line Statistics Table (GSF) -->
+    {% if project.gsf_dir %}
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-list-numbers me-2 text-yellow"></i>Line Statistics</h3>
+                <div class="card-actions">
+                    <button class="btn btn-sm btn-outline-yellow" onclick="loadLineStats()">
+                        <i class="ti ti-refresh me-1"></i>Load GSF Stats
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0" id="line-stats-body">
+                <div class="p-3 text-muted">Click "Load GSF Stats" to analyze {{ project.gsf_dir }}</div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 </div>
 
 <!-- QC Results -->
@@ -879,6 +897,56 @@ function loadBeamProfile(pdsPath, pingIdx) {
                       colorbar: { title: 'm', titlefont: {color: '#e2e8f0'}, tickfont: {color: '#e2e8f0'} } },
         }], layout, { responsive: true, displayModeBar: false });
     }).catch(() => {});
+}
+
+function loadLineStats() {
+    const body = document.getElementById('line-stats-body');
+    body.innerHTML = '<div class="p-3"><div class="spinner-border spinner-border-sm text-yellow me-2"></div>Loading GSF line statistics...</div>';
+
+    fetch('/api/line-stats', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ gsf_dir: '{{ project.gsf_dir or "" }}', max_pings: 100 })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { body.innerHTML = `<div class="p-3 text-danger">${data.error}</div>`; return; }
+        if (!data.lines || data.lines.length === 0) { body.innerHTML = '<div class="p-3 text-muted">No GSF lines found</div>'; return; }
+
+        let html = '<table class="table table-sm table-hover table-vcenter"><thead><tr>';
+        html += '<th>#</th><th>Line</th><th class="text-end">Pings</th><th class="text-end">Beams</th>';
+        html += '<th class="text-end">Min(m)</th><th class="text-end">Max(m)</th><th class="text-end">Mean(m)</th><th class="text-end">Std(m)</th><th>Status</th>';
+        html += '</tr></thead><tbody>';
+
+        for (let i = 0; i < data.lines.length; i++) {
+            const l = data.lines[i];
+            const rowClass = l.outlier ? 'table-warning' : '';
+            const badge = l.outlier ? '<span class="badge bg-yellow">OUTLIER</span>' : '<span class="badge bg-green">OK</span>';
+
+            html += `<tr class="${rowClass}">
+                <td>${i + 1}</td>
+                <td><code>${l.name.substring(0, 45)}</code></td>
+                <td class="text-end">${l.pings.toLocaleString()}</td>
+                <td class="text-end">${l.beams.toLocaleString()}</td>
+                <td class="text-end">${l.depth_min.toFixed(1)}</td>
+                <td class="text-end">${l.depth_max.toFixed(1)}</td>
+                <td class="text-end"><strong>${l.depth_mean.toFixed(1)}</strong></td>
+                <td class="text-end">${l.depth_std.toFixed(2)}</td>
+                <td>${badge}</td>
+            </tr>`;
+        }
+        html += '</tbody></table>';
+
+        // Summary bar
+        const outliers = data.lines.filter(l => l.outlier).length;
+        const summaryColor = outliers > 0 ? 'warning' : 'success';
+        html = `<div class="alert alert-${summaryColor} p-2 m-3 mb-0">
+            <strong>${data.total} lines</strong> analyzed | ${outliers} outlier(s)
+        </div>` + html;
+
+        body.innerHTML = html;
+    })
+    .catch(e => { body.innerHTML = `<div class="p-3 text-danger">${e}</div>`; });
 }
 
 function changePing(delta) {
