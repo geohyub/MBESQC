@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}{{ project.name }}{% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.35.0.min.js" charset="utf-8"></script>
+<style>
+#nav-map { height: 350px; border-radius: 4px; }
+.leaflet-container { background: #1a1a2e; }
+</style>
+{% endblock %}
+
 {% block page_header %}
 <div class="row align-items-center">
     <div class="col-auto">
@@ -244,6 +254,48 @@
         <div id="verify-outputs">
             <div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-file-export me-1"></i>Available Outputs</span></div>
             <div class="row g-2" id="output-grid"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Visualization Panel (shown after Analyze + Motion) -->
+<div class="row row-deck row-cards mb-4" id="viz-panel" style="display:none">
+    <!-- Navigation Map -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-map-pin me-2 text-cyan"></i>Navigation Track</h3>
+            </div>
+            <div class="card-body p-0">
+                <div id="nav-map"></div>
+            </div>
+        </div>
+    </div>
+    <!-- Beam Profile -->
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-chart-dots me-2 text-blue"></i>Beam Depth Profile</h3>
+                <div class="card-actions">
+                    <button class="btn btn-sm btn-outline-cyan" id="prev-ping" onclick="changePing(-1)"><i class="ti ti-chevron-left"></i></button>
+                    <span class="mx-2 small" id="ping-label">Ping 0</span>
+                    <button class="btn btn-sm btn-outline-cyan" id="next-ping" onclick="changePing(1)"><i class="ti ti-chevron-right"></i></button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="beam-chart" style="height:350px"></div>
+            </div>
+        </div>
+    </div>
+    <!-- Attitude Time Series -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-wave-sine me-2 text-green"></i>Attitude Time Series</h3>
+            </div>
+            <div class="card-body p-0">
+                <div id="attitude-chart" style="height:300px"></div>
+            </div>
         </div>
     </div>
 </div>
@@ -702,8 +754,136 @@ function verifyMotion() {
         }
 
         resultDiv.innerHTML = html;
+
+        // Load visualizations after motion analysis
+        if (window._lastPdsPath) {
+            loadVisualizations(window._lastPdsPath);
+        }
     })
     .catch(e => { resultDiv.innerHTML = `<div class="alert alert-danger">${e}</div>`; });
+}
+
+// ===== Visualization Functions =====
+let _currentPing = 0;
+let _navMap = null;
+
+function loadVisualizations(pdsPath) {
+    document.getElementById('viz-panel').style.display = 'flex';
+
+    // 1. Navigation Map
+    fetch('/api/nav-track', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ pds_path: pdsPath, max_pings: 30 })
+    })
+    .then(r => r.json())
+    .then(geo => {
+        if (geo.error) return;
+        if (_navMap) _navMap.remove();
+
+        _navMap = L.map('nav-map', { zoomControl: true }).setView(
+            [(geo.bounds.south + geo.bounds.north) / 2,
+             (geo.bounds.west + geo.bounds.east) / 2], 15
+        );
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            maxZoom: 19, attribution: '© CARTO'
+        }).addTo(_navMap);
+
+        // Track line
+        const coords = geo.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+        L.polyline(coords, { color: '#0ca5e9', weight: 3, opacity: 0.8 }).addTo(_navMap);
+
+        // Ping markers
+        if (geo.ping_points) {
+            for (const p of geo.ping_points) {
+                L.circleMarker([p.lat, p.lon], {
+                    radius: 4, color: '#2fb344', fillColor: '#2fb344', fillOpacity: 0.8
+                }).bindPopup(`<b>${p.time}</b><br>Depth: ${p.depth}m`).addTo(_navMap);
+            }
+        }
+
+        // Start marker
+        if (coords.length > 0) {
+            L.marker(coords[0], {
+                icon: L.divIcon({ className: '', html: '<div style="background:#0ca5e9;color:white;padding:2px 6px;border-radius:4px;font-size:11px;white-space:nowrap">START</div>' })
+            }).addTo(_navMap);
+        }
+
+        _navMap.fitBounds(L.polyline(coords).getBounds().pad(0.2));
+    }).catch(() => {});
+
+    // 2. Beam Profile (first ping)
+    _currentPing = 0;
+    loadBeamProfile(pdsPath, 0);
+
+    // 3. Attitude Time Series
+    fetch('/api/attitude-timeseries', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ pds_path: pdsPath, max_pings: 30 })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error || data.total === 0) return;
+
+        const x = data.timestamps.length > 0 ?
+            data.timestamps.map(t => new Date(t * 1000).toISOString().slice(11, 23)) :
+            Array.from({length: data.total}, (_, i) => i);
+
+        const layout = {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#e2e8f0', size: 10 },
+            margin: { t: 10, b: 40, l: 50, r: 10 },
+            showlegend: true,
+            legend: { orientation: 'h', y: 1.1 },
+            xaxis: { title: 'Time', gridcolor: '#334155' },
+            yaxis: { title: 'Degrees / Metres', gridcolor: '#334155' },
+        };
+
+        Plotly.newPlot('attitude-chart', [
+            { x: x, y: data.roll, name: 'Roll (°)', type: 'scatter', line: { color: '#0ca5e9', width: 1.5 } },
+            { x: x, y: data.pitch, name: 'Pitch (°)', type: 'scatter', line: { color: '#2fb344', width: 1.5 } },
+            { x: x, y: data.heave, name: 'Heave (m)', type: 'scatter', line: { color: '#f59f00', width: 1.5 }, yaxis: 'y' },
+        ], layout, { responsive: true, displayModeBar: false });
+    }).catch(() => {});
+}
+
+function loadBeamProfile(pdsPath, pingIdx) {
+    fetch('/api/beam-profile', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ pds_path: pdsPath, ping_index: pingIdx })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) return;
+        document.getElementById('ping-label').textContent =
+            `Ping ${pingIdx} | ${data.nadir_depth}m | ${data.swath_width}m wide | ${data.time}`;
+
+        const layout = {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#e2e8f0', size: 10 },
+            margin: { t: 10, b: 40, l: 50, r: 10 },
+            xaxis: { title: 'Across-Track (m)', gridcolor: '#334155', zeroline: true, zerolinecolor: '#f59f00' },
+            yaxis: { title: 'Depth (m)', gridcolor: '#334155', autorange: 'reversed' },
+        };
+
+        Plotly.newPlot('beam-chart', [{
+            x: data.across,
+            y: data.depth,
+            mode: 'markers',
+            type: 'scatter',
+            marker: { size: 2, color: data.depth, colorscale: 'Viridis', showscale: true,
+                      colorbar: { title: 'm', titlefont: {color: '#e2e8f0'}, tickfont: {color: '#e2e8f0'} } },
+        }], layout, { responsive: true, displayModeBar: false });
+    }).catch(() => {});
+}
+
+function changePing(delta) {
+    _currentPing = Math.max(0, _currentPing + delta);
+    if (window._lastPdsPath) loadBeamProfile(window._lastPdsPath, _currentPing);
 }
 
 function verifyOffsets(pdsPath) {
