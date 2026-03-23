@@ -361,13 +361,13 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
 
     # Fallback: compute depth from TT if no depth array found
     if (len(ping.depth) == 0 or not np.any(ping.depth != 0)) and len(ping.travel_time) > 0:
-        tt = ping.travel_time
-        valid = tt > 0
+        tt = ping.travel_time.copy()
+        valid = np.isfinite(tt) & (tt > 0) & (tt < 1e6)
         if np.sum(valid) > 100:
-            _DEFAULT_SV = 1500.0  # m/s fallback sound velocity
-            # Simple vertical depth: depth = TT(ms) * c / 2 / 1000
-            depth_approx = tt * _DEFAULT_SV / 2.0 / 1000.0
-            ping.depth = -depth_approx  # negative = below surface
+            _DEFAULT_SV = 1500.0
+            depth_approx = np.zeros_like(tt)
+            depth_approx[valid] = tt[valid] * _DEFAULT_SV / 2.0 / 1000.0
+            ping.depth = -depth_approx
             ping._depth_source = 'computed_from_tt'
 
     # Fallback: compute across-track from depth + TT (no beam angle needed)
@@ -375,14 +375,13 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
         if len(ping.depth) > 0 and len(ping.travel_time) > 0:
             tt = ping.travel_time
             d = np.abs(ping.depth)
-            valid = (tt > 0) & (d > 0)
+            valid = np.isfinite(tt) & np.isfinite(d) & (tt > 0) & (d > 0) & (tt < 1e6)
             if np.sum(valid) > 100:
                 _DEFAULT_SV = 1500.0
-                slant = tt * _DEFAULT_SV / 2.0 / 1000.0
-                # across = sqrt(slant^2 - depth^2), with sign from beam position
-                sq_diff = slant ** 2 - d ** 2
-                sq_diff = np.maximum(sq_diff, 0)
-                across = np.sqrt(sq_diff)
+                across = np.zeros_like(tt)
+                slant = tt[valid] * _DEFAULT_SV / 2.0 / 1000.0
+                sq_diff = np.maximum(slant ** 2 - d[valid] ** 2, 0)
+                across[valid] = np.sqrt(sq_diff)
                 # Port side (first half) = negative, stbd = positive
                 across[:_NUM_BEAMS // 2] *= -1
                 ping.across_track = across
