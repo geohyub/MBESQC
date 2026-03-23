@@ -132,6 +132,31 @@ class PdsTideRecord:
 
 
 @dataclass
+class PdsComputedRecord:
+    """Computed ping parameters (Type 13/15) — per-ping solved position."""
+    timestamp: float = 0.0
+    datetime_utc: datetime.datetime | None = None
+    easting: float = 0.0      # projected X (meters, EPSG from header)
+    northing: float = 0.0     # projected Y (meters)
+    speed: float = 0.0        # m/s
+    heading: float = 0.0      # degrees
+    along_dist: float = 0.0   # cumulative along-track distance (meters)
+    draft: float = 0.0        # applied draft/sealevel (meters)
+    heave: float = 0.0        # applied heave (meters)
+
+
+@dataclass
+class PdsSensorStatus:
+    """Sensor status record (Type 10) — raw IMU + heading angles."""
+    timestamp: float = 0.0
+    datetime_utc: datetime.datetime | None = None
+    raw_roll: float = 0.0     # raw IMU roll (degrees, may include mounting)
+    raw_pitch: float = 0.0    # raw IMU pitch
+    raw_heading: float = 0.0  # raw heading (degrees)
+    raw_course: float = 0.0   # raw course (degrees)
+
+
+@dataclass
 class PdsBinaryData:
     """Complete parsed PDS binary acquisition data."""
     filepath: str = ""
@@ -140,6 +165,8 @@ class PdsBinaryData:
     navigation: list[PdsNavRecord] = field(default_factory=list)
     attitude: list[PdsAttitudeRecord] = field(default_factory=list)
     tide: list[PdsTideRecord] = field(default_factory=list)
+    computed: list[PdsComputedRecord] = field(default_factory=list)
+    sensor_status: list[PdsSensorStatus] = field(default_factory=list)
 
     # Derived summary (prefer @property but keep fields for serialisation)
     first_ping_time: datetime.datetime | None = None
@@ -931,7 +958,125 @@ def read_pds_binary(
             except (IOError, OSError) as e:
                 warnings.warn(f"Failed to read tide from {filepath}: {e}")
 
+    # 3d. Computed ping parameters (Type 13/15, 155B)
+    computed_entries = ff08_records.get('computed', [])
+    if computed_entries:
+        try:
+            result.computed = _parse_ff08_computed(filepath, computed_entries)
+        except (IOError, OSError) as e:
+            warnings.warn(f"Failed to parse computed records: {e}")
+
+    # 3e. Sensor status (Type 10, variable size ~111B)
+    for cat, entries in ff08_records.items():
+        if cat.startswith('size_111') or cat.startswith('size_119'):
+            # Skip attitude which is already parsed
+            if cat == 'attitude':
+                continue
+            try:
+                result.sensor_status = _parse_ff08_sensor_status(filepath, entries)
+                if result.sensor_status:
+                    break
+            except (IOError, OSError):
+                continue
+
     return result
+
+
+def _parse_ff08_computed(filepath: str,
+                         entries: list[tuple[int, int, int]]) -> list[PdsComputedRecord]:
+    """Parse Type 13/15 computed ping parameters.
+
+    Payload layout (148 bytes):
+      +2:  f64 timestamp (ms epoch) — at standard offset
+      +40: f64 easting (projected meters)
+      +48: f64 northing (projected meters)
+      +56: f64 speed (m/s)
+      +64: f64 heading (degrees)
+      +72: f64 along-track distance (meters, cumulative)
+      +80: f64 draft/sealevel (meters)
+      +88: f64 heave (meters)
+    """
+    records = []
+    with open(filepath, 'rb') as f:
+        for file_off, data_size, rec_type in entries:
+            f.seek(file_off + 7)
+            payload = f.read(data_size - 2)
+            if len(payload) < 96:
+                continue
+
+            ts = struct.unpack_from('<d', payload, 2)[0]
+            if not _is_valid_timestamp(ts):
+                continue
+
+            rec = PdsComputedRecord(
+                timestamp=ts,
+                datetime_utc=_ms_to_datetime(ts),
+                easting=struct.unpack_from('<d', payload, 40)[0],
+                northing=struct.unpack_from('<d', payload, 48)[0],
+                speed=struct.unpack_from('<d', payload, 56)[0],
+                heading=struct.unpack_from('<d', payload, 64)[0],
+                along_dist=struct.unpack_from('<d', payload, 72)[0],
+                draft=struct.unpack_from('<d', payload, 80)[0],
+                heave=struct.unpack_from('<d', payload, 88)[0],
+            )
+            # Sanity check: easting/northing should be reasonable projected coords
+            if abs(rec.easting) < 1e8 and abs(rec.northing) < 1e8:
+                records.append(rec)
+
+    return records
+
+
+def _parse_ff08_sensor_status(filepath: str,
+                               entries: list[tuple[int, int, int]]) -> list[PdsSensorStatus]:
+    """Parse Type 10 sensor status records.
+
+    Payload layout (~104 bytes):
+      +2:  f64 timestamp (ms epoch)
+      +32: f64 raw roll (degrees, with mounting offset)
+      +40: f64 raw pitch
+      +48: f64 raw heading (degrees)
+      +64: f64 raw course (degrees)
+    """
+    records = []
+    with open(filepath, 'rb') as f:
+        for file_off, data_size, rec_type in entries:
+            f.seek(file_off + 7)
+            payload = f.read(data_size - 2)
+            if len(payload) < 72:
+                continue
+
+            ts = struct.unpack_from('<d', payload, 2)[0]
+            if not _is_valid_timestamp(ts):
+                continue
+
+            rec = PdsSensorStatus(
+                timestamp=ts,
+                datetime_utc=_ms_to_datetime(ts),
+            )
+
+            # Roll at +32, Pitch at +40
+            if len(payload) >= 48:
+                v32 = struct.unpack_from('<d', payload, 32)[0]
+                v40 = struct.unpack_from('<d', payload, 40)[0]
+                if abs(v32) < 360 and abs(v40) < 360:
+                    rec.raw_roll = v32
+                    rec.raw_pitch = v40
+
+            # Heading at +48
+            if len(payload) >= 56:
+                v48 = struct.unpack_from('<d', payload, 48)[0]
+                if 0 <= v48 < 360:
+                    rec.raw_heading = v48
+
+            # Course at +64
+            if len(payload) >= 72:
+                v64 = struct.unpack_from('<d', payload, 64)[0]
+                if 0 <= v64 < 360:
+                    rec.raw_course = v64
+
+            records.append(rec)
+
+    return records
 
 
 # ── Convenience Functions ──────────────────────────────────────
