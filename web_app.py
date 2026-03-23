@@ -547,6 +547,212 @@ def api_verify_motion():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route("/api/nav-track", methods=["POST"])
+def api_nav_track():
+    """Get navigation track as GeoJSON for map display."""
+    try:
+        import numpy as np
+        data = request.json
+        pds_path = data.get("pds_path", "")
+        max_pings = data.get("max_pings", 50)
+
+        if not os.path.isfile(pds_path):
+            return jsonify({"error": "PDS file not found"}), 400
+
+        from pds_toolkit import read_pds_binary
+        pds = read_pds_binary(pds_path, max_pings=max_pings)
+
+        coords = []
+        timestamps = []
+        for r in pds.navigation:
+            if r.latitude != 0 and r.longitude != 0:
+                coords.append([r.longitude, r.latitude])
+                if r.timestamp > 0:
+                    timestamps.append(r.timestamp)
+
+        if not coords:
+            return jsonify({"error": "No navigation data found"}), 404
+
+        # Ping positions (from depth array pings with timestamps)
+        ping_points = []
+        for p in pds.pings:
+            if p.datetime_utc and len(p.depth) > 0:
+                # Find nearest nav point
+                for r in pds.navigation:
+                    if r.latitude != 0 and abs(r.timestamp - p.timestamp) < 2000:
+                        nadir_depth = float(np.abs(p.depth[p.depth != 0]).mean()) if np.any(p.depth != 0) else 0
+                        ping_points.append({
+                            "lon": r.longitude,
+                            "lat": r.latitude,
+                            "depth": round(nadir_depth, 1),
+                            "time": str(p.datetime_utc)[:19],
+                        })
+                        break
+
+        # Build GeoJSON
+        geojson = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "LineString", "coordinates": coords},
+                    "properties": {
+                        "name": os.path.basename(pds_path),
+                        "points": len(coords),
+                    },
+                }
+            ],
+            "ping_points": ping_points,
+            "bounds": {
+                "south": min(c[1] for c in coords),
+                "north": max(c[1] for c in coords),
+                "west": min(c[0] for c in coords),
+                "east": max(c[0] for c in coords),
+            },
+        }
+
+        return jsonify(geojson)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/beam-profile", methods=["POST"])
+def api_beam_profile():
+    """Get beam depth profile (across-track vs depth) for a single ping."""
+    try:
+        import numpy as np
+        data = request.json
+        pds_path = data.get("pds_path", "")
+        ping_index = data.get("ping_index", 0)
+        source = data.get("source", "pds")  # "pds" or "gsf"
+
+        if not os.path.isfile(pds_path):
+            return jsonify({"error": "File not found"}), 400
+
+        if source == "pds":
+            from pds_toolkit import read_pds_binary
+            pds = read_pds_binary(pds_path, max_pings=ping_index + 3)
+            if ping_index >= len(pds.pings):
+                return jsonify({"error": f"Ping {ping_index} not found"}), 404
+
+            p = pds.pings[ping_index]
+            across = p.across_track if len(p.across_track) > 0 else np.zeros(1024)
+            depth = np.abs(p.depth) if len(p.depth) > 0 else np.zeros(1024)
+
+            # Filter valid beams
+            valid = (depth > 0.1) & np.isfinite(across) & np.isfinite(depth)
+            result = {
+                "across": [round(float(x), 2) for x in across[valid]],
+                "depth": [round(float(d), 2) for d in depth[valid]],
+                "num_beams": int(valid.sum()),
+                "nadir_depth": round(float(depth[len(depth)//2]), 2) if len(depth) > 0 else 0,
+                "swath_width": round(float(across[valid].max() - across[valid].min()), 1) if valid.sum() > 0 else 0,
+                "ping_index": ping_index,
+                "source": source,
+                "time": str(p.datetime_utc)[:19] if p.datetime_utc else "",
+            }
+        else:
+            return jsonify({"error": "GSF source not yet implemented"}), 501
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/attitude-timeseries", methods=["POST"])
+def api_attitude_timeseries():
+    """Get attitude time series data for charting."""
+    try:
+        import numpy as np
+        data = request.json
+        pds_path = data.get("pds_path", "")
+        max_pings = data.get("max_pings", 50)
+
+        if not os.path.isfile(pds_path):
+            return jsonify({"error": "File not found"}), 400
+
+        from pds_toolkit import read_pds_binary
+        pds = read_pds_binary(pds_path, max_pings=max_pings)
+
+        result = {"roll": [], "pitch": [], "heave": [], "heading": [], "timestamps": []}
+
+        for a in pds.attitude:
+            t = getattr(a, 'timestamp', 0)
+            if t > 0:
+                result["timestamps"].append(round(t / 1000.0, 3))  # seconds since epoch
+            result["roll"].append(round(getattr(a, 'roll', 0), 4))
+            result["pitch"].append(round(getattr(a, 'pitch', 0), 4))
+            result["heave"].append(round(getattr(a, 'heave', 0), 4))
+            result["heading"].append(round(getattr(a, 'heading', 0), 2))
+
+        result["total"] = len(pds.attitude)
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/line-stats", methods=["POST"])
+def api_line_stats():
+    """Get per-line depth statistics from GSF files."""
+    try:
+        import numpy as np
+        data = request.json
+        gsf_dir = data.get("gsf_dir", "")
+        max_pings = data.get("max_pings", 100)
+
+        if not os.path.isdir(gsf_dir):
+            return jsonify({"error": "GSF directory not found"}), 400
+
+        from pds_toolkit import read_gsf
+        gsf_files = sorted([f for f in os.listdir(gsf_dir) if f.endswith('.gsf')])
+
+        lines = []
+        for gf in gsf_files[:20]:  # max 20 lines
+            try:
+                gsf_path = os.path.join(gsf_dir, gf)
+                gsf = read_gsf(gsf_path, max_pings=max_pings)
+                if not gsf.pings:
+                    continue
+
+                all_depths = []
+                for p in gsf.pings:
+                    if hasattr(p, 'depth') and len(p.depth) > 0:
+                        valid = p.depth[p.depth > 0.5]
+                        if len(valid) > 0:
+                            all_depths.extend(valid.tolist())
+
+                if all_depths:
+                    arr = np.array(all_depths)
+                    lines.append({
+                        "name": gf,
+                        "pings": len(gsf.pings),
+                        "beams": len(all_depths),
+                        "depth_min": round(float(arr.min()), 2),
+                        "depth_max": round(float(arr.max()), 2),
+                        "depth_mean": round(float(arr.mean()), 2),
+                        "depth_std": round(float(arr.std()), 2),
+                    })
+            except Exception:
+                continue
+
+        # Flag outlier lines (depth mean > 2σ from overall mean)
+        if len(lines) > 2:
+            means = np.array([l["depth_mean"] for l in lines])
+            overall_mean = float(means.mean())
+            overall_std = float(means.std())
+            for l in lines:
+                diff = abs(l["depth_mean"] - overall_mean)
+                l["outlier"] = diff > 2 * overall_std if overall_std > 0 else False
+
+        return jsonify({"lines": lines, "total": len(lines)})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/om-configs")
 def api_om_configs():
     """List OffsetManager vessel configs."""
