@@ -514,20 +514,25 @@ def _try_dynamic_detection(data: bytes, ping: PdsPing) -> None:
             continue
 
         # Depth (positive): all > 0, range 1-500m
-        # May be U-shape (edges > center for corrected depth)
-        # or flat-ish (similar values across all beams)
         if len(ping.depth) == 0 and mn > 0.5 and mx < 500 and std > 1 and std < 50:
+            # REJECT V-shape arrays (TT has edges > center, depth does NOT)
+            port_avg = float(np.mean(window[50:150]))
+            stbd_avg = float(np.mean(window[-150:-50]))
+            v_ratio = min(port_avg, stbd_avg) / max(center, 0.01) if center > 0.01 else 0
+            if v_ratio > 1.15:
+                # This is TT (V-shape), not depth
+                i += _NUM_BEAMS
+                continue
+
             # Verify it's not just TT values by checking range differs from TT
             if len(ping.travel_time) > 0:
                 tt_center = float(ping.travel_time[_NUM_BEAMS // 2])
-                if abs(center - tt_center) > 2:  # different from TT nadir
-                    ping.depth = -window.copy()
+                if abs(center - tt_center) < 2:  # too similar to TT nadir
                     i += _NUM_BEAMS
                     continue
-            else:
-                ping.depth = -window.copy()
-                i += _NUM_BEAMS
-                continue
+            ping.depth = -window.copy()
+            i += _NUM_BEAMS
+            continue
 
         # Across-track: sign change, realistic range (max ~500m swath per side)
         if (len(ping.across_track) == 0 and mn < -5 and mx > 5
