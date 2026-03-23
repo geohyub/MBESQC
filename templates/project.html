@@ -210,23 +210,23 @@
             <thead>
                 <tr>
                     <th>#</th>
-                    <th>Filename</th>
-                    <th class="text-end">Size</th>
-                    <th class="text-end">Actions</th>
+                    <th>파일명</th>
+                    <th class="text-end">크기</th>
+                    <th class="text-end">작업</th>
                 </tr>
             </thead>
             <tbody>
                 {% for pds in project.pds_files %}
-                <tr>
+                <tr id="pds-row-{{ loop.index0 }}">
                     <td>{{ loop.index }}</td>
                     <td><code>{{ pds.name }}</code></td>
                     <td class="text-end">{{ "%.1f"|format(pds.size_mb) }} MB</td>
                     <td class="text-end">
-                        <button class="btn btn-sm btn-outline-cyan" onclick="analyzePds('{{ pds.path|replace('\\', '\\\\') }}')">
-                            <i class="ti ti-search me-1"></i>Analyze
+                        <button class="btn btn-sm btn-outline-cyan" onclick="analyzePds('{{ pds.path|replace('\\', '\\\\') }}', {{ loop.index0 }})">
+                            <i class="ti ti-search me-1"></i>분석
                         </button>
                         <button class="btn btn-sm btn-cyan" onclick="runProjectQc({{ project.id }}, {{ loop.index0 }})">
-                            <i class="ti ti-player-play me-1"></i>Run QC
+                            <i class="ti ti-player-play me-1"></i>QC 실행
                         </button>
                     </td>
                 </tr>
@@ -440,7 +440,22 @@
 
 {% block extra_js %}
 <script>
-function analyzePds(path) {
+function highlightRow(rowIdx) {
+    // Clear all highlights
+    document.querySelectorAll('[id^="pds-row-"]').forEach(r => {
+        r.style.background = '';
+        r.style.borderLeft = '';
+    });
+    // Highlight selected row
+    const row = document.getElementById('pds-row-' + rowIdx);
+    if (row) {
+        row.style.background = 'rgba(12,165,233,0.15)';
+        row.style.borderLeft = '3px solid #0ca5e9';
+    }
+}
+
+function analyzePds(path, rowIdx) {
+    if (rowIdx !== undefined) highlightRow(rowIdx);
     fetch('/api/pds-info', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -645,52 +660,52 @@ function renderVerificationDashboard(data) {
 // ===== 분석 능력 Gauge =====
 const CAP_TREE = {
     pds:   { weight: 40, label: 'PDS', capabilities: [
-        'Settings Validation (Roll/Pitch/Heave ON/OFF)',
-        'SVP Application Check',
-        'Sensor Offset Extraction',
-        'Calibration Values (StaticRoll/Pitch)',
-        'Draft & Sealevel Check',
-        'Navigation Continuity',
-        'Beam Depth (TT-derived)',
+        '설정 검증 (Roll/Pitch/Heave ON/OFF)',
+        'SVP 적용 여부 확인',
+        '센서 오프셋 추출',
+        '캘리브레이션 값 (StaticRoll/Pitch)',
+        '흘수 및 해수면 검사',
+        '항법 데이터 연속성',
+        '빔 수심 (TT 기반)',
         '모션 시계열',
-        'Tide Records',
-        'Ping Rate Analysis',
+        '조석 레코드',
+        '핑 레이트 분석',
     ]},
     gsf:   { weight: 20, label: 'GSF', capabilities: [
-        'Beam-level Across-Track (100%)',
-        'High-res Attitude (50Hz)',
-        'Roll Bias Estimation (port/stbd asymmetry)',
-        'Pitch Bias Estimation (reciprocal lines)',
-        'SVP Profiles Embedded',
-        'IHO S-44 Depth Accuracy',
-        'Beam Quality Flags',
+        '빔별 Across-Track (100%)',
+        '고해상도 Attitude (50Hz)',
+        '롤 바이어스 추정 (좌/우현 비대칭)',
+        '피치 바이어스 추정 (왕복 라인)',
+        'SVP 프로파일 내장',
+        'IHO S-44 수심 정확도',
+        '빔 품질 플래그',
     ]},
     hvf:   { weight: 10, label: 'HVF', capabilities: [
-        'PDS vs HVF Offset Cross-check',
-        'MountAngle vs StaticRoll/Pitch Comparison',
-        'Sensor Offset History Tracking',
+        'PDS vs HVF 오프셋 교차검증',
+        'MountAngle vs StaticRoll/Pitch 비교',
+        '센서 오프셋 이력 추적',
     ]},
     om:    { weight: 7, label: 'OffsetManager', capabilities: [
-        'Recorded vs Applied Offset Validation',
-        'Correction Value Suggestion',
-        'Multi-vessel Offset DB Lookup',
+        '기록 오프셋 vs 적용 오프셋 검증',
+        '보정값 제안',
+        '다중 선박 오프셋 DB 조회',
     ]},
     s7k:   { weight: 5, label: 'S7K', capabilities: [
-        'Raw vs Processed Depth Comparison',
-        'Motion Pre/Post Correction Compare',
+        'Raw vs 처리 수심 비교',
+        '모션 보정 전후 비교',
     ]},
     svp:   { weight: 5, label: 'SVP File', capabilities: [
-        'SVP Time/Location Suitability',
-        'Outer Beam Depth Impact Estimation',
+        'SVP 시간/위치 적합성',
+        '외측 빔 수심 영향 추정',
     ]},
     xline: { weight: 8, label: 'Cross-line', capabilities: [
-        'Cross-line Depth Difference Statistics',
-        'Heading Bias Estimation',
-        'Calibration Residual Analysis',
+        '교차라인 수심 차이 통계',
+        '헤딩 바이어스 추정',
+        '캘리브레이션 잔차 분석',
     ]},
     fau:   { weight: 5, label: 'FAU', capabilities: [
-        'Tide-corrected Depth Verification',
-        'Final Deliverable Depth QC',
+        '조석 보정 수심 검증',
+        '최종 납품 수심 QC',
     ]},
 };
 
@@ -1197,7 +1212,8 @@ function verifyOffsets(pdsPath) {
 }
 
 function runProjectQc(projectId, fileIdx) {
-    if (!confirm('Run QC for this file?')) return;
+    if (!confirm('이 파일에 대해 QC를 실행하시겠습니까?')) return;
+    highlightRow(fileIdx);
     fetch(`/api/project-qc/${projectId}/${fileIdx}`, {method: 'POST'})
     .then(r => r.json())
     .then(data => {
