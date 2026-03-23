@@ -228,6 +228,26 @@
     <div class="card-body" id="pds-info-body"></div>
 </div>
 
+<!-- Verification Dashboard (shown after PDS Analyze) -->
+<div class="card mb-4" id="verify-card" style="display:none">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-shield-check me-2 text-green"></i>Verification Dashboard</h3>
+    </div>
+    <div class="card-body">
+        <!-- Offset Comparison Table -->
+        <div class="mb-3" id="verify-offsets"></div>
+
+        <!-- Motion Settings Status -->
+        <div class="mb-3" id="verify-motion"></div>
+
+        <!-- Available Outputs Preview -->
+        <div id="verify-outputs">
+            <div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-file-export me-1"></i>Available Outputs</span></div>
+            <div class="row g-2" id="output-grid"></div>
+        </div>
+    </div>
+</div>
+
 <!-- QC Results -->
 {% if jobs %}
 <div class="card mb-4">
@@ -318,8 +338,150 @@ function analyzePds(path) {
             ${sensors ? `<table class="table table-sm"><thead><tr><th>Sensor</th><th>X</th><th>Y</th><th>Z</th></tr></thead><tbody>${sensors}</tbody></table>` : ''}
         `;
         card.scrollIntoView({behavior: 'smooth'});
+
+        // === Render Verification Dashboard ===
+        renderVerificationDashboard(data);
     })
     .catch(e => alert('Error: ' + e));
+}
+
+function renderVerificationDashboard(data) {
+    const vcard = document.getElementById('verify-card');
+    vcard.style.display = 'block';
+
+    // 1. Offset Comparison Table
+    let offsetHtml = '<div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-ruler me-1"></i>Sensor Offsets</span></div>';
+    offsetHtml += '<table class="table table-sm table-hover"><thead><tr><th>Sensor</th><th>X (m)</th><th>Y (m)</th><th>Z (m)</th><th>Status</th></tr></thead><tbody>';
+
+    if (data.sensors) {
+        for (const [name, xyz] of Object.entries(data.sensors)) {
+            if (name === 'Zero Offset') continue;
+            const statusBadge = '<span class="badge bg-blue-lt">PDS</span>';
+            offsetHtml += `<tr>
+                <td><strong>${name}</strong></td>
+                <td>${xyz.x >= 0 ? '+' : ''}${xyz.x.toFixed(3)}</td>
+                <td>${xyz.y >= 0 ? '+' : ''}${xyz.y.toFixed(3)}</td>
+                <td>${xyz.z >= 0 ? '+' : ''}${xyz.z.toFixed(3)}</td>
+                <td>${statusBadge}</td>
+            </tr>`;
+        }
+    }
+    offsetHtml += '</tbody></table>';
+    offsetHtml += '<div class="text-muted small"><i class="ti ti-info-circle me-1"></i>Add HVF or OffsetManager to enable cross-validation</div>';
+    document.getElementById('verify-offsets').innerHTML = offsetHtml;
+
+    // 2. Motion & Settings Status
+    const checks = [
+        { name: 'Roll Correction', on: data.apply_roll, icon: 'ti-rotate-clockwise' },
+        { name: 'Pitch Correction', on: data.apply_pitch, icon: 'ti-arrow-up' },
+        { name: 'Heave Correction', on: data.apply_heave, icon: 'ti-wave-sine' },
+        { name: 'SVP Applied', on: data.apply_svp, icon: 'ti-wave-square' },
+    ];
+
+    let motionHtml = '<div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-settings me-1"></i>Processing Settings</span></div>';
+    motionHtml += '<div class="row g-2">';
+    for (const c of checks) {
+        const color = c.on ? 'green' : (c.name === 'SVP Applied' ? 'yellow' : 'red');
+        const label = c.on ? 'ON' : 'OFF';
+        motionHtml += `<div class="col-6 col-lg-3">
+            <div class="card card-sm">
+                <div class="card-body d-flex align-items-center p-2">
+                    <span class="avatar avatar-sm bg-${color}-lt me-2"><i class="ti ${c.icon}"></i></span>
+                    <div>
+                        <div class="fw-bold small">${c.name}</div>
+                        <span class="badge bg-${color}">${label}</span>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    // Calibration values
+    motionHtml += `<div class="col-6 col-lg-3">
+        <div class="card card-sm">
+            <div class="card-body p-2">
+                <div class="fw-bold small">Static Roll</div>
+                <div class="h3 mb-0">${data.static_roll.toFixed(4)}°</div>
+            </div>
+        </div>
+    </div>`;
+    motionHtml += `<div class="col-6 col-lg-3">
+        <div class="card card-sm">
+            <div class="card-body p-2">
+                <div class="fw-bold small">Static Pitch</div>
+                <div class="h3 mb-0">${data.static_pitch.toFixed(4)}°</div>
+            </div>
+        </div>
+    </div>`;
+    motionHtml += `<div class="col-6 col-lg-3">
+        <div class="card card-sm">
+            <div class="card-body p-2">
+                <div class="fw-bold small">Sealevel</div>
+                <div class="h3 mb-0">${data.sealevel}m</div>
+            </div>
+        </div>
+    </div>`;
+    motionHtml += `<div class="col-6 col-lg-3">
+        <div class="card card-sm">
+            <div class="card-body p-2">
+                <div class="fw-bold small">Draft</div>
+                <div class="h3 mb-0">${data.draft}m</div>
+            </div>
+        </div>
+    </div>`;
+    motionHtml += '</div>';
+    document.getElementById('verify-motion').innerHTML = motionHtml;
+
+    // 3. Available Outputs
+    const hasGsf = {{ 'true' if project.gsf_dir else 'false' }};
+    const hasHvf = {{ 'true' if project.hvf_dir else 'false' }};
+
+    const outputs = [
+        { name: 'Pre-Processing Report', icon: 'ti-clipboard-check', available: true, desc: 'Settings validation (15 checks)', color: 'green' },
+        { name: 'Sensor Offset Table', icon: 'ti-ruler-2', available: true, desc: 'All offsets from PDS header', color: 'green' },
+        { name: 'Navigation Plot', icon: 'ti-map-pin', available: true, desc: 'Track line from PDS nav records', color: 'green' },
+        { name: 'Depth Profile', icon: 'ti-chart-area-line', available: true, desc: 'Beam depth across-track view', color: 'green' },
+        { name: 'Attitude Time Series', icon: 'ti-wave-sine', available: true, desc: 'Roll/Pitch/Heave from PDS attitude', color: 'green' },
+        { name: 'Motion QC Report', icon: 'ti-heartbeat', available: hasGsf, desc: hasGsf ? 'High-res 50Hz attitude analysis' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'Roll Bias Analysis', icon: 'ti-arrows-left-right', available: hasGsf, desc: hasGsf ? 'Port/Stbd depth asymmetry' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'Offset Cross-check', icon: 'ti-shield-check', available: hasHvf, desc: hasHvf ? 'PDS vs HVF comparison' : 'Add HVF to unlock', color: hasHvf ? 'green' : 'muted' },
+        { name: 'Coverage Map', icon: 'ti-map', available: hasGsf, desc: hasGsf ? 'Swath coverage with gaps' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'DTM Surface', icon: 'ti-3d-cube-sphere', available: hasGsf, desc: hasGsf ? 'Bathymetric grid (GeoTIFF)' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'DQR Presentation', icon: 'ti-presentation', available: hasGsf, desc: hasGsf ? 'Daily QC Report (10-slide PPT)' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'Excel QC Report', icon: 'ti-table', available: true, desc: 'Summary statistics workbook', color: 'green' },
+    ];
+
+    let outHtml = '';
+    let availCount = 0;
+    for (const o of outputs) {
+        if (o.available) availCount++;
+        outHtml += `<div class="col-6 col-lg-4 col-xl-3">
+            <div class="card card-sm border${o.available ? '' : ' opacity-50'}">
+                <div class="card-body d-flex align-items-center p-2">
+                    <span class="avatar avatar-sm bg-${o.color}-lt me-2"><i class="ti ${o.icon}"></i></span>
+                    <div>
+                        <div class="fw-bold small">${o.name}</div>
+                        <div class="text-muted" style="font-size:10px">${o.desc}</div>
+                    </div>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    // Output progress bar
+    const outPct = Math.round(availCount / outputs.length * 100);
+    document.getElementById('output-grid').innerHTML = `
+        <div class="col-12 mb-2">
+            <div class="d-flex justify-content-between mb-1">
+                <span class="small fw-bold">${availCount}/${outputs.length} outputs available</span>
+                <span class="small text-muted">${outPct}%</span>
+            </div>
+            <div class="progress" style="height:6px">
+                <div class="progress-bar bg-green" style="width:${outPct}%"></div>
+            </div>
+        </div>
+        ${outHtml}
+    `;
 }
 
 // ===== Analysis Capability Gauge =====
