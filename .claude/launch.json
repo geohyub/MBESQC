@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mbes-qc",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["web_app.py"],
+      "port": 5016
+    }
+  ]
+}

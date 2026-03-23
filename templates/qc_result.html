@@ -32,7 +32,7 @@
     <div class="card-body text-center py-5">
         <div class="spinner-border text-cyan mb-3"></div>
         <h3>Running QC...</h3>
-        <p class="text-light">{{ job.progress }}</p>
+        <p style="color:#cbd5e1">{{ job.progress }}</p>
     </div>
 </div>
 <script>
@@ -55,7 +55,7 @@ setTimeout(() => location.reload(), 2000);
         <div class="card">
             <div class="card-body">
                 <div class="subheader">Pings / Beams</div>
-                <div class="h2 mb-0 mt-2">{{ "{:,}".format(r.total_pings) }} <span class="fs-5 text-light">/ {{ "{:,}".format(r.total_beams) }}</span></div>
+                <div class="h2 mb-0 mt-2">{{ "{:,}".format(r.total_pings) }} <span class="fs-5" style="color:#cbd5e1">/ {{ "{:,}".format(r.total_beams) }}</span></div>
             </div>
         </div>
     </div>
@@ -63,7 +63,7 @@ setTimeout(() => location.reload(), 2000);
         <div class="card">
             <div class="card-body">
                 <div class="subheader">Depth Range</div>
-                <div class="h2 mb-0 mt-2">{{ "%.1f"|format(r.depth_range[0]|abs) }} — {{ "%.1f"|format(r.depth_range[1]|abs) }} <span class="fs-5 text-light">m</span></div>
+                <div class="h2 mb-0 mt-2">{{ "%.1f"|format(r.depth_range[0]|abs) }} — {{ "%.1f"|format(r.depth_range[1]|abs) }} <span class="fs-5" style="color:#cbd5e1">m</span></div>
             </div>
         </div>
     </div>

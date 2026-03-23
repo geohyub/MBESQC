@@ -9,8 +9,11 @@
         </h2>
     </div>
     <div class="col-auto ms-auto d-flex gap-2">
+        <a href="/new-project" class="btn btn-green">
+            <i class="ti ti-folder-plus me-1"></i> 새 프로젝트
+        </a>
         <a href="/new-qc" class="btn btn-cyan">
-            <i class="ti ti-player-play me-1"></i> 새 QC
+            <i class="ti ti-player-play me-1"></i> 빠른 QC
         </a>
     </div>
 </div>
@@ -25,7 +28,7 @@
                 <div class="subheader">QC Jobs</div>
                 <div class="h1 mb-0 mt-2">{{ total_jobs }}</div>
                 <div class="d-flex mt-2">
-                    <span class="text-secondary"><i class="ti ti-clipboard-check"></i> 전체 분석</span>
+                    <span style="color:#cbd5e1"><i class="ti ti-clipboard-check"></i> 전체 분석</span>
                 </div>
             </div>
         </div>
@@ -65,6 +68,36 @@
         </div>
     </div>
 </div>
+
+<!-- Projects -->
+{% if projects %}
+<div class="row row-cards mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-folder me-2 text-green"></i>Projects</h3>
+                <div class="card-actions"><span class="badge bg-green">{{ projects|length }}</span></div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-vcenter card-table">
+                    <thead><tr><th>Name</th><th>Vessel</th><th>PDS Files</th><th>QC Jobs</th><th></th></tr></thead>
+                    <tbody>
+                        {% for p in projects %}
+                        <tr>
+                            <td><strong>{{ p.name }}</strong></td>
+                            <td>{{ p.vessel or '-' }}</td>
+                            <td>{{ p.pds_files|length }}</td>
+                            <td>{{ p.jobs|length if p.jobs else 0 }}</td>
+                            <td><a href="/project/{{ p.id }}" class="btn btn-sm btn-outline-green">Open</a></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 <!-- Results Table — Full Width -->
 <div class="row row-cards mb-3">
@@ -115,7 +148,7 @@
                                 {% endif %}
                                 {% else %}—{% endif %}
                             </td>
-                            <td class="text-center text-secondary">{{ "%.1f"|format(r.elapsed_sec) }}s</td>
+                            <td class="text-center" style="color:#cbd5e1">{{ "%.1f"|format(r.elapsed_sec) }}s</td>
                             <td><a href="/qc/{{ job.id }}" class="btn btn-sm btn-outline-cyan">View</a></td>
                         </tr>
                         {% endfor %}
@@ -127,7 +160,7 @@
                 <div class="empty">
                     <div class="empty-icon"><i class="ti ti-3d-cube-sphere"></i></div>
                     <p class="empty-title">QC 결과 없음</p>
-                    <p class="empty-subtitle text-secondary">PDS 파일에 대한 QC 분석을 실행하여 시작하세요.</p>
+                    <p class="empty-subtitle" style="color:#cbd5e1">PDS 파일에 대한 QC 분석을 실행하여 시작하세요.</p>
                     <div class="empty-action">
                         <a href="/new-qc" class="btn btn-cyan"><i class="ti ti-player-play me-2"></i>새 QC</a>
                     </div>
@@ -151,7 +184,7 @@
                     </div>
                     <div class="col">
                         <h3 class="card-title mb-1">빠른 시작</h3>
-                        <p class="text-secondary mb-0">
+                        <p class="text-light mb-0">
                             PDS 파일을 선택하여 IHO 기준 멀티빔 QC 분석을 실행하세요.
                         </p>
                     </div>
@@ -191,7 +224,7 @@
                         </div>
                         <div class="col text-break">
                             <div class="fw-bold">{{ name }}</div>
-                            <div class="text-secondary small">{{ desc }}</div>
+                            <div class="text-light small">{{ desc }}</div>
                         </div>
                     </div>
                 </div>
@@ -211,28 +244,28 @@
                         <span class="badge bg-cyan fw-bold" style="min-width:42px;text-align:center;">PDS</span>
                         <div>
                             <div class="small fw-bold">Navipac/GeoView PDS</div>
-                            <div class="text-secondary" style="font-size:.75rem;">Primary MBES acquisition format</div>
+                            <div style="color:#cbd5e1" style="font-size:.75rem;">Primary MBES acquisition format</div>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 p-2 rounded bg-dark-lt">
                         <span class="badge bg-green-lt fw-bold" style="min-width:42px;text-align:center;">GSF</span>
                         <div>
                             <div class="small fw-bold">Generic Sensor Format</div>
-                            <div class="text-secondary" style="font-size:.75rem;">Standard MBES data format</div>
+                            <div style="color:#cbd5e1" style="font-size:.75rem;">Standard MBES data format</div>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 p-2 rounded bg-dark-lt">
                         <span class="badge bg-blue-lt fw-bold" style="min-width:42px;text-align:center;">ALL</span>
                         <div>
                             <div class="small fw-bold">Kongsberg ALL</div>
-                            <div class="text-secondary" style="font-size:.75rem;">Kongsberg EM series raw data</div>
+                            <div style="color:#cbd5e1" style="font-size:.75rem;">Kongsberg EM series raw data</div>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 p-2 rounded bg-dark-lt">
                         <span class="badge bg-secondary fw-bold" style="min-width:42px;text-align:center;">XTF</span>
                         <div>
                             <div class="small fw-bold">Triton XTF</div>
-                            <div class="text-secondary" style="font-size:.75rem;">Extended Triton format</div>
+                            <div style="color:#cbd5e1" style="font-size:.75rem;">Extended Triton format</div>
                         </div>
                     </div>
                 </div>

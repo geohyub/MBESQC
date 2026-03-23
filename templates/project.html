@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }}{% endblock %}
+
+{% block page_header %}
+<div class="row align-items-center">
+    <div class="col-auto">
+        <h2 class="page-title"><i class="ti ti-folder me-2"></i>{{ project.name }}</h2>
+        <div class="page-subtitle">{{ project.vessel }} | {{ project.pds_files|length }} PDS files</div>
+    </div>
+    <div class="col-auto ms-auto">
+        <a href="/new-qc" class="btn btn-outline-cyan"><i class="ti ti-player-play me-1"></i>Quick QC</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Project KPI -->
+<div class="row row-deck row-cards mb-4">
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">PDS Files</div>
+                <div class="h2 mb-0 mt-2">{{ project.pds_files|length }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">QC Jobs</div>
+                <div class="h2 mb-0 mt-2">{{ jobs|length }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">GSF Directory</div>
+                <div class="small mt-2">{{ project.gsf_dir or 'Not set' }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="subheader">HVF Directory</div>
+                <div class="small mt-2">{{ project.hvf_dir or 'Not set' }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- PDS Files Table -->
+<div class="card mb-4">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-file me-2 text-cyan"></i>PDS Files</h3>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Filename</th>
+                    <th class="text-end">Size</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for pds in project.pds_files %}
+                <tr>
+                    <td>{{ loop.index }}</td>
+                    <td><code>{{ pds.name }}</code></td>
+                    <td class="text-end">{{ "%.1f"|format(pds.size_mb) }} MB</td>
+                    <td class="text-end">
+                        <button class="btn btn-sm btn-outline-cyan" onclick="analyzePds('{{ pds.path|replace('\\', '\\\\') }}')">
+                            <i class="ti ti-search me-1"></i>Analyze
+                        </button>
+                        <button class="btn btn-sm btn-cyan" onclick="runProjectQc({{ project.id }}, {{ loop.index0 }})">
+                            <i class="ti ti-player-play me-1"></i>Run QC
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- PDS Info Preview -->
+<div class="card mb-4" id="pds-info-card" style="display:none">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-info-circle me-2 text-blue"></i>PDS Information</h3>
+    </div>
+    <div class="card-body" id="pds-info-body"></div>
+</div>
+
+<!-- QC Results -->
+{% if jobs %}
+<div class="card mb-4">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-clipboard-check me-2 text-green"></i>QC Results</h3>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-vcenter card-table">
+            <thead>
+                <tr>
+                    <th>Job</th>
+                    <th>File</th>
+                    <th>Status</th>
+                    <th>Result</th>
+                    <th class="text-end">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for j in jobs %}
+                <tr>
+                    <td>#{{ j.id }}</td>
+                    <td><code>{{ j.pds_path | basename }}</code></td>
+                    <td>
+                        {% if j.status == 'done' %}
+                        <span class="badge bg-green">Done</span>
+                        {% elif j.status == 'running' %}
+                        <span class="badge bg-blue">Running</span>
+                        {% else %}
+                        <span class="badge bg-red">Error</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if j.result and j.result.preprocess %}
+                        {{ j.result.preprocess.num_pass }}P / {{ j.result.preprocess.num_warn }}W / {{ j.result.preprocess.num_fail }}F
+                        {% endif %}
+                    </td>
+                    <td class="text-end">
+                        <a href="/qc/{{ j.id }}" class="btn btn-sm btn-outline-cyan">View</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function analyzePds(path) {
+    fetch('/api/pds-info', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({pds_path: path})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { alert(data.error); return; }
+        const card = document.getElementById('pds-info-card');
+        card.style.display = 'block';
+
+        let sensors = '';
+        if (data.sensors) {
+            for (const [name, xyz] of Object.entries(data.sensors)) {
+                if (name === 'Zero Offset') continue;
+                sensors += `<tr><td>${name}</td><td>${xyz.x.toFixed(3)}</td><td>${xyz.y.toFixed(3)}</td><td>${xyz.z.toFixed(3)}</td></tr>`;
+            }
+        }
+
+        document.getElementById('pds-info-body').innerHTML = `
+            <div class="row mb-3">
+                <div class="col-3"><strong>Vessel:</strong> ${data.vessel_name}</div>
+                <div class="col-3"><strong>Coord:</strong> ${data.coord_system}</div>
+                <div class="col-3"><strong>Start:</strong> ${data.start_time}</div>
+                <div class="col-3"><strong>Size:</strong> ${data.file_size_mb.toFixed(1)} MB</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-3"><span class="badge ${data.apply_roll ? 'bg-green' : 'bg-red'}">Roll ${data.apply_roll ? 'ON' : 'OFF'}</span></div>
+                <div class="col-3"><span class="badge ${data.apply_pitch ? 'bg-green' : 'bg-red'}">Pitch ${data.apply_pitch ? 'ON' : 'OFF'}</span></div>
+                <div class="col-3"><span class="badge ${data.apply_heave ? 'bg-green' : 'bg-red'}">Heave ${data.apply_heave ? 'ON' : 'OFF'}</span></div>
+                <div class="col-3"><span class="badge ${data.apply_svp ? 'bg-green' : 'bg-yellow'}">SVP ${data.apply_svp ? 'ON' : 'OFF'}</span></div>
+            </div>
+            <div class="mb-3">
+                <strong>Cal:</strong> Roll=${data.static_roll.toFixed(4)} Pitch=${data.static_pitch.toFixed(4)}
+                &nbsp;<strong>Sealevel:</strong> ${data.sealevel}m <strong>Draft:</strong> ${data.draft}m
+            </div>
+            ${sensors ? `<table class="table table-sm"><thead><tr><th>Sensor</th><th>X</th><th>Y</th><th>Z</th></tr></thead><tbody>${sensors}</tbody></table>` : ''}
+        `;
+        card.scrollIntoView({behavior: 'smooth'});
+    })
+    .catch(e => alert('Error: ' + e));
+}
+
+function runProjectQc(projectId, fileIdx) {
+    if (!confirm('Run QC for this file?')) return;
+    fetch(`/api/project-qc/${projectId}/${fileIdx}`, {method: 'POST'})
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { alert(data.error); return; }
+        // Poll until done
+        const interval = setInterval(() => {
+            fetch(`/api/status/${data.job_id}`)
+            .then(r => r.json())
+            .then(s => {
+                if (s.status === 'done' || s.status === 'error') {
+                    clearInterval(interval);
+                    window.location.href = `/qc/${data.job_id}`;
+                }
+            });
+        }, 1000);
+    })
+    .catch(e => alert('Error: ' + e));
+}
+</script>
+{% endblock %}

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}New Project{% endblock %}
+
+{% block page_header %}
+<div class="row align-items-center">
+    <div class="col-auto">
+        <h2 class="page-title"><i class="ti ti-folder-plus me-2"></i>New Project</h2>
+        <div class="page-subtitle">MBES QC Project</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<form method="POST" action="/new-project">
+<div class="row row-cards">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-info-circle me-2 text-cyan"></i>Project Info</h3>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-6">
+                        <label class="form-label required">Project Name</label>
+                        <input type="text" name="project_name" class="form-control" placeholder="EDF MBES Survey 2025" required>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">Vessel Name</label>
+                        <input type="text" name="vessel_name" class="form-control" placeholder="Geoview">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mt-3">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-file me-2 text-blue"></i>Data Files</h3>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">PDS Directory <span class="text-secondary">(auto-scans all .pds files)</span></label>
+                    <input type="text" name="pds_dir" class="form-control" placeholder="E:\project\MBES\PDS">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Or Single PDS File</label>
+                    <input type="text" name="pds_file" class="form-control" placeholder="E:\project\MBES\file.pds">
+                </div>
+                <hr>
+                <div class="mb-3">
+                    <label class="form-label">GSF Directory <span class="text-secondary">(optional)</span></label>
+                    <input type="text" name="gsf_dir" class="form-control" placeholder="E:\project\GSF">
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">HVF Directory <span class="text-secondary">(optional)</span></label>
+                    <input type="text" name="hvf_dir" class="form-control" placeholder="E:\project\Vessels">
+                </div>
+                <div class="row">
+                    <div class="col-6">
+                        <label class="form-label">S7K Directory <span class="text-secondary">(optional)</span></label>
+                        <input type="text" name="s7k_dir" class="form-control" placeholder="E:\project\S7K">
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label">FAU Directory <span class="text-secondary">(optional)</span></label>
+                        <input type="text" name="fau_dir" class="form-control" placeholder="E:\project\FAU">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-settings me-2 text-yellow"></i>Settings</h3>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <label class="form-label">OffsetManager Config</label>
+                    <select name="om_config_id" class="form-select">
+                        <option value="">-- None --</option>
+                        {% for cfg in om_configs %}
+                        <option value="{{ cfg.id }}">{{ cfg.vessel_name }} / {{ cfg.project_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="card-footer text-end">
+                <button type="submit" class="btn btn-cyan btn-lg w-100">
+                    <i class="ti ti-folder-plus me-2"></i>Create Project
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+</form>
+{% endblock %}

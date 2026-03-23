@@ -7,6 +7,18 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css"/>
     {% block extra_css %}{% endblock %}
+    <style>
+        /* Global dark theme: ALL text bright */
+    body { color: #e2e8f0 !important; }
+    * { color: inherit; }
+    .badge { color: revert; }
+    .btn { color: revert; }
+    .nav-link .nav-link-icon { color: revert; }
+    a { color: revert; }
+    h1,h2,h3,h4,h5,h6,.card-title,.page-title { color: #f1f5f9 !important; }
+    .subheader,.datagrid-title { color: #cbd5e1 !important; }
+    .datagrid-content { color: #f1f5f9 !important; }
+    </style>
 </head>
 <body class="d-flex flex-column">
     <div class="page">
@@ -32,9 +44,15 @@
                             </a>
                         </li>
                         <li class="nav-item">
+                            <a class="nav-link {% if request.path == '/new-project' %}active{% endif %}" href="/new-project">
+                                <span class="nav-link-icon"><i class="ti ti-folder-plus"></i></span>
+                                <span class="nav-link-title">새 프로젝트</span>
+                            </a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link {% if request.path == '/new-qc' %}active{% endif %}" href="/new-qc">
                                 <span class="nav-link-icon"><i class="ti ti-player-play"></i></span>
-                                <span class="nav-link-title">새 QC</span>
+                                <span class="nav-link-title">빠른 QC</span>
                             </a>
                         </li>
                         <li class="nav-item">
@@ -81,7 +99,7 @@
                 <div class="container-xl">
                     <div class="row text-center align-items-center">
                         <div class="col-12">
-                            <span class="text-secondary">
+                            <span style="color:#cbd5e1">
                                 MBES QC v3.0 &copy; 2025-2026 Geoview Co., Ltd. | Port 5016
                             </span>
                         </div>

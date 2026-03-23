@@ -30,20 +30,26 @@ app.secret_key = os.environ.get("MBESQC_SECRET", os.urandom(24).hex())
 def basename_filter(path):
     return Path(path).name if path else ''
 
-# ── In-memory job storage ──────────────────────────────────
+# ── In-memory storage ─────────────────────────────────────
 
 _jobs: dict[int, dict] = {}
+_projects: dict[int, dict] = {}
 _job_counter = 0
-_job_lock = threading.Lock()
+_project_counter = 0
+_lock = threading.Lock()
 
 OM_DB_PATH = r"E:\Software\GeoView_Suite\OffsetManager\offsets.db"
 
 
-def _next_job_id() -> int:
-    global _job_counter
-    with _job_lock:
-        _job_counter += 1
-        return _job_counter
+def _next_id(counter_name: str) -> int:
+    global _job_counter, _project_counter
+    with _lock:
+        if counter_name == 'job':
+            _job_counter += 1
+            return _job_counter
+        else:
+            _project_counter += 1
+            return _project_counter
 
 
 # ── Routes ─────────────────────────────────────────────────
@@ -52,7 +58,67 @@ def _next_job_id() -> int:
 def dashboard():
     completed = [j for j in _jobs.values() if j.get("status") == "done"]
     completed.sort(key=lambda j: j.get("finished_at", ""), reverse=True)
-    return render_template("dashboard.html", jobs=completed, total_jobs=len(_jobs))
+    return render_template("dashboard.html", jobs=completed, total_jobs=len(_jobs),
+                           projects=list(_projects.values()))
+
+
+@app.route("/new-project", methods=["GET", "POST"])
+def new_project():
+    """Create a new project and register data files."""
+    if request.method == "POST":
+        data = request.form
+        proj_id = _next_id('project')
+        project = {
+            "id": proj_id,
+            "name": data.get("project_name", f"Project {proj_id}"),
+            "vessel": data.get("vessel_name", ""),
+            "created_at": datetime.now().isoformat(),
+            "pds_files": [],
+            "gsf_dir": data.get("gsf_dir", ""),
+            "hvf_dir": data.get("hvf_dir", ""),
+            "s7k_dir": data.get("s7k_dir", ""),
+            "fau_dir": data.get("fau_dir", ""),
+            "om_config_id": data.get("om_config_id", ""),
+            "jobs": [],
+        }
+
+        # Auto-scan PDS directory
+        pds_dir = data.get("pds_dir", "")
+        if pds_dir and Path(pds_dir).is_dir():
+            for f in sorted(Path(pds_dir).glob("*.pds")):
+                project["pds_files"].append({
+                    "path": str(f),
+                    "name": f.name,
+                    "size_mb": f.stat().st_size / 1024 / 1024,
+                })
+        # Or single PDS file
+        pds_file = data.get("pds_file", "")
+        if pds_file and Path(pds_file).exists():
+            f = Path(pds_file)
+            project["pds_files"].append({
+                "path": str(f),
+                "name": f.name,
+                "size_mb": f.stat().st_size / 1024 / 1024,
+            })
+
+        _projects[proj_id] = project
+        flash(f"Project '{project['name']}' created with {len(project['pds_files'])} PDS files.", "success")
+        return redirect(url_for("view_project", project_id=proj_id))
+
+    om_configs = _load_om_configs()
+    return render_template("new_project.html", om_configs=om_configs)
+
+
+@app.route("/project/<int:project_id>")
+def view_project(project_id):
+    """View project with registered files and QC results."""
+    project = _projects.get(project_id)
+    if not project:
+        flash("Project not found.", "danger")
+        return redirect(url_for("dashboard"))
+    project_jobs = [_jobs[jid] for jid in project.get("jobs", []) if jid in _jobs]
+    return render_template("project.html", project=project, jobs=project_jobs,
+                           om_configs=_load_om_configs())
 
 
 @app.route("/new-qc")
@@ -227,7 +293,7 @@ def api_run_qc():
     if not pds_path:
         return jsonify({"error": "Invalid or missing PDS file path"}), 400
 
-    job_id = _next_job_id()
+    job_id = _next_id('job')
     job = {
         "id": job_id,
         "pds_path": pds_path,
@@ -244,6 +310,46 @@ def api_run_qc():
         "result": None,
     }
     _jobs[job_id] = job
+
+    thread = threading.Thread(target=_run_qc_job, args=(job,), daemon=True)
+    thread.start()
+
+    return jsonify({"job_id": job_id, "status": "started"})
+
+
+@app.route("/api/project-qc/<int:project_id>/<int:file_idx>", methods=["POST"])
+def api_project_qc(project_id, file_idx):
+    """Run QC for a specific PDS file within a project."""
+    project = _projects.get(project_id)
+    if not project:
+        return jsonify({"error": "Project not found"}), 404
+    if file_idx >= len(project["pds_files"]):
+        return jsonify({"error": "File index out of range"}), 400
+
+    pds_info = project["pds_files"][file_idx]
+    pds_path = pds_info["path"]
+    if not Path(pds_path).exists():
+        return jsonify({"error": f"File not found: {pds_path}"}), 404
+
+    job_id = _next_id('job')
+    job = {
+        "id": job_id,
+        "project_id": project_id,
+        "pds_path": pds_path,
+        "gsf_dir": project.get("gsf_dir", ""),
+        "hvf_dir": project.get("hvf_dir", ""),
+        "om_config_id": project.get("om_config_id"),
+        "lat_range": [-90, 90],
+        "lon_range": [-180, 180],
+        "max_pings": None,
+        "cell_size": 5.0,
+        "status": "running",
+        "progress": "Starting...",
+        "started_at": datetime.now().isoformat(),
+        "result": None,
+    }
+    _jobs[job_id] = job
+    project.setdefault("jobs", []).append(job_id)
 
     thread = threading.Thread(target=_run_qc_job, args=(job,), daemon=True)
     thread.start()
