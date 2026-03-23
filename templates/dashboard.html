@@ -208,11 +208,11 @@
             </div>
             <div class="list-group list-group-flush">
                 {% set pipeline_stages = [
-                    ("ti-upload", "PDS Ingest", "Parse PDS (Navipac/GeoView) bathymetry data"),
-                    ("ti-ruler", "Pre-Check", "Beam geometry, depth validation"),
-                    ("ti-chart-bar", "Statistics", "Depth, ping, beam density stats"),
-                    ("ti-map", "Coverage", "Swath coverage & overlap analysis"),
-                    ("ti-trophy", "IHO Grade", "Order 1a/1b/Special compliance"),
+                    ("ti-upload", "PDS 데이터 입력", "PDS (Navipac/GeoView) 멀티빔 데이터 파싱"),
+                    ("ti-ruler", "전처리 검증", "빔 형상, 수심 유효성, 센서 설정 확인"),
+                    ("ti-chart-bar", "통계 분석", "수심, 핑, 빔 밀도 통계 산출"),
+                    ("ti-map", "커버리지", "스와스 커버리지 및 오버랩 분석"),
+                    ("ti-trophy", "IHO 등급", "IHO S-44 Order 1a/1b/Special 판정"),
                 ] %}
                 {% for icon, name, desc in pipeline_stages %}
                 <div class="list-group-item">
@@ -243,29 +243,29 @@
                     <div class="d-flex align-items-center gap-3 p-2 rounded" style="background:rgba(12,165,233,0.15)">
                         <span class="badge bg-cyan fw-bold" style="min-width:42px;text-align:center;">PDS</span>
                         <div>
-                            <div class="small fw-bold text-white">Navipac/GeoView PDS</div>
-                            <div class="text-white" style="font-size:.75rem;opacity:0.7">멀티빔 취득 메인 포맷</div>
+                            <div class="small fw-bold" style="color:#f1f5f9 !important">Navipac/GeoView PDS</div>
+                            <div style="color:#94a3b8 !important;font-size:.75rem">멀티빔 취득 메인 포맷</div>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 p-2 rounded" style="background:rgba(255,255,255,0.05)">
-                        <span class="badge bg-green-lt fw-bold text-green" style="min-width:42px;text-align:center;">GSF</span>
+                        <span class="badge bg-green-lt fw-bold" style="min-width:42px;text-align:center;color:#2fb344 !important">GSF</span>
                         <div>
-                            <div class="small fw-bold text-white">Generic Sensor Format</div>
-                            <div class="text-white" style="font-size:.75rem;opacity:0.7">표준 MBES 데이터 포맷</div>
+                            <div class="small fw-bold" style="color:#f1f5f9 !important">Generic Sensor Format</div>
+                            <div style="color:#94a3b8 !important;font-size:.75rem">표준 MBES 데이터 포맷</div>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 p-2 rounded" style="background:rgba(255,255,255,0.05)">
-                        <span class="badge bg-blue-lt fw-bold text-blue" style="min-width:42px;text-align:center;">ALL</span>
+                        <span class="badge bg-blue-lt fw-bold" style="min-width:42px;text-align:center;color:#4299e1 !important">ALL</span>
                         <div>
-                            <div class="small fw-bold text-white">Kongsberg ALL</div>
-                            <div class="text-white" style="font-size:.75rem;opacity:0.7">Kongsberg EM 시리즈 Raw 데이터</div>
+                            <div class="small fw-bold" style="color:#f1f5f9 !important">Kongsberg ALL</div>
+                            <div style="color:#94a3b8 !important;font-size:.75rem">Kongsberg EM 시리즈 Raw 데이터</div>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3 p-2 rounded" style="background:rgba(255,255,255,0.05)">
                         <span class="badge bg-secondary fw-bold" style="min-width:42px;text-align:center;">XTF</span>
                         <div>
-                            <div class="small fw-bold text-white">Extended Triton Format</div>
-                            <div class="text-white" style="font-size:.75rem;opacity:0.7">XTF 확장 포맷</div>
+                            <div class="small fw-bold" style="color:#f1f5f9 !important">Extended Triton Format</div>
+                            <div style="color:#94a3b8 !important;font-size:.75rem">XTF 확장 포맷</div>
                         </div>
                     </div>
                 </div>
