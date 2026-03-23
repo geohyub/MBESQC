@@ -121,6 +121,55 @@ def view_project(project_id):
                            om_configs=_load_om_configs())
 
 
+@app.route("/project/<int:project_id>/edit", methods=["POST"])
+def edit_project(project_id):
+    """Update project settings."""
+    project = _projects.get(project_id)
+    if not project:
+        return jsonify({"error": "프로젝트를 찾을 수 없습니다"}), 404
+
+    data = request.form or request.json or {}
+    if data.get("project_name"):
+        project["name"] = data["project_name"]
+    if data.get("vessel_name"):
+        project["vessel"] = data["vessel_name"]
+    if "gsf_dir" in data:
+        project["gsf_dir"] = data["gsf_dir"]
+    if "hvf_dir" in data:
+        project["hvf_dir"] = data["hvf_dir"]
+    if "s7k_dir" in data:
+        project["s7k_dir"] = data["s7k_dir"]
+    if "fau_dir" in data:
+        project["fau_dir"] = data["fau_dir"]
+    if "om_config_id" in data:
+        project["om_config_id"] = data["om_config_id"]
+
+    # Re-scan PDS files if dir changed
+    if data.get("pds_dir") and Path(data["pds_dir"]).is_dir():
+        pds_files = sorted(Path(data["pds_dir"]).glob("*.pds"))
+        project["pds_files"] = [
+            {"path": str(p), "name": p.name, "size_mb": p.stat().st_size / 1024 / 1024}
+            for p in pds_files
+        ]
+
+    flash("프로젝트가 수정되었습니다.", "success")
+    return redirect(url_for("view_project", project_id=project_id))
+
+
+@app.route("/project/<int:project_id>/delete", methods=["POST"])
+def delete_project(project_id):
+    """Delete a project."""
+    project = _projects.pop(project_id, None)
+    if not project:
+        flash("프로젝트를 찾을 수 없습니다.", "danger")
+    else:
+        # Also remove associated jobs
+        for jid in project.get("jobs", []):
+            _jobs.pop(jid, None)
+        flash(f"프로젝트 '{project['name']}'이(가) 삭제되었습니다.", "success")
+    return redirect(url_for("dashboard"))
+
+
 @app.route("/new-qc")
 def new_qc():
     om_configs = _load_om_configs()

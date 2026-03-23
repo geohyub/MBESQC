@@ -6,7 +6,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.plot.ly/plotly-2.35.0.min.js" charset="utf-8"></script>
 <style>
-#nav-map { height: 350px; border-radius: 4px; }
+#nav-map { height: 450px; border-radius: 4px; }
 .leaflet-container { background: #1a1a2e; }
 </style>
 {% endblock %}
@@ -17,8 +17,14 @@
         <h2 class="page-title"><i class="ti ti-folder me-2"></i>{{ project.name }}</h2>
         <div class="page-subtitle">{{ project.vessel }} | {{ project.pds_files|length }} PDS files</div>
     </div>
-    <div class="col-auto ms-auto">
-        <a href="/new-qc" class="btn btn-outline-cyan"><i class="ti ti-player-play me-1"></i>Quick QC</a>
+    <div class="col-auto ms-auto d-flex gap-2">
+        <button class="btn btn-outline-yellow" data-bs-toggle="modal" data-bs-target="#editProjectModal">
+            <i class="ti ti-edit me-1"></i>수정
+        </button>
+        <form action="/project/{{ project.id }}/delete" method="POST" onsubmit="return confirm('정말 이 프로젝트를 삭제하시겠습니까?')">
+            <button type="submit" class="btn btn-outline-red"><i class="ti ti-trash me-1"></i>삭제</button>
+        </form>
+        <a href="/new-qc" class="btn btn-outline-cyan"><i class="ti ti-player-play me-1"></i>빠른 QC</a>
     </div>
 </div>
 {% endblock %}
@@ -381,6 +387,56 @@
 </div>
 {% endif %}
 {% endblock %}
+
+<!-- Edit Project Modal -->
+<div class="modal modal-blur fade" id="editProjectModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <form action="/project/{{ project.id }}/edit" method="POST">
+                <div class="modal-header">
+                    <h5 class="modal-title">프로젝트 수정</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">프로젝트명</label>
+                            <input type="text" class="form-control" name="project_name" value="{{ project.name }}">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">선박명</label>
+                            <input type="text" class="form-control" name="vessel_name" value="{{ project.vessel }}">
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">GSF 폴더</label>
+                            <input type="text" class="form-control" name="gsf_dir" value="{{ project.gsf_dir or '' }}">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">HVF 폴더</label>
+                            <input type="text" class="form-control" name="hvf_dir" value="{{ project.hvf_dir or '' }}">
+                        </div>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">S7K 폴더</label>
+                            <input type="text" class="form-control" name="s7k_dir" value="{{ project.s7k_dir or '' }}">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">FAU 폴더</label>
+                            <input type="text" class="form-control" name="fau_dir" value="{{ project.fau_dir or '' }}">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-cyan">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
 
 {% block extra_js %}
 <script>
@@ -815,9 +871,16 @@ function loadVisualizations(pdsPath) {
         if (geo.error) return;
         if (_navMap) _navMap.remove();
 
-        _navMap = L.map('nav-map', { zoomControl: true }).setView(
+        _navMap = L.map('nav-map', {
+            zoomControl: true,
+            scrollWheelZoom: true,
+            doubleClickZoom: true,
+            dragging: true,
+            maxZoom: 22,
+            minZoom: 3,
+        }).setView(
             [(geo.bounds.south + geo.bounds.north) / 2,
-             (geo.bounds.west + geo.bounds.east) / 2], 15
+             (geo.bounds.west + geo.bounds.east) / 2], 17
         );
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             maxZoom: 19, attribution: '© CARTO'
@@ -843,7 +906,9 @@ function loadVisualizations(pdsPath) {
             }).addTo(_navMap);
         }
 
-        _navMap.fitBounds(L.polyline(coords).getBounds().pad(0.2));
+        _navMap.fitBounds(L.polyline(coords).getBounds().pad(0.5));
+        // If very short track, zoom to max 18
+        if (_navMap.getZoom() > 18) _navMap.setZoom(18);
     }).catch(() => {});
 
     // 2. Beam Profile (first ping)
