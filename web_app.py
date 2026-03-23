@@ -759,6 +759,76 @@ def api_om_configs():
     return jsonify(_load_om_configs())
 
 
+@app.route("/api/om-sensors/<int:config_id>")
+def api_om_sensors(config_id):
+    """Get sensor offsets for a specific OffsetManager config."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(OM_DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        # Config info
+        config = conn.execute(
+            "SELECT * FROM vessel_configs WHERE id = ?", (config_id,)
+        ).fetchone()
+        if not config:
+            conn.close()
+            return jsonify({"error": "Config not found"}), 404
+
+        # All sensors for this config
+        sensors = conn.execute(
+            "SELECT * FROM sensor_offsets WHERE config_id = ? ORDER BY sensor_type, sensor_name",
+            (config_id,)
+        ).fetchall()
+        conn.close()
+
+        # Sensor type Korean labels
+        type_labels = {
+            "MRU": "모션센서 (MRU)",
+            "IMU": "관성센서 (IMU)",
+            "MBES Transducer": "멀티빔 (MBES)",
+            "GPS": "GNSS 안테나",
+            "SBP Transducer": "SBP 트랜스듀서",
+            "Echosounder": "싱글빔",
+            "Towpoint": "견인점",
+            "Other": "기타",
+        }
+
+        result = {
+            "config": {
+                "id": config["id"],
+                "vessel_name": config["vessel_name"],
+                "project_name": config["project_name"],
+                "config_date": config["config_date"],
+                "reference_point": config["reference_point"],
+                "description": config["description"],
+            },
+            "sensors": [
+                {
+                    "id": s["id"],
+                    "name": s["sensor_name"],
+                    "type": s["sensor_type"],
+                    "type_ko": type_labels.get(s["sensor_type"], s["sensor_type"]),
+                    "x": s["x_offset"],
+                    "y": s["y_offset"],
+                    "z": s["z_offset"],
+                    "roll": s["roll_offset"],
+                    "pitch": s["pitch_offset"],
+                    "heading": s["heading_offset"],
+                    "latency": s["latency"],
+                    "notes": s["notes"] or "",
+                }
+                for s in sensors
+            ],
+            "total": len(sensors),
+        }
+
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/scan-folders", methods=["POST"])
 def api_scan_folders():
     """Scan companion folders for matching files by timestamp."""

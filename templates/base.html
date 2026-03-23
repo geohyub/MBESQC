@@ -6,8 +6,13 @@
     <title>{% block title %}MBES QC{% endblock %} — GeoView QC</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css"/>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/dist/tabler-icons.min.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"/>
     {% block extra_css %}{% endblock %}
     <style>
+        /* Korean font + Global dark theme */
+    body, * { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .card-title, h1, h2, h3, h4, h5, h6 { font-weight: 600; }
+    code { font-family: 'D2Coding', 'Consolas', monospace; font-size: 0.85em; }
         /* Global dark theme: ALL text bright */
     body { color: #e2e8f0 !important; }
     * { color: inherit; }

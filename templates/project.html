@@ -29,7 +29,7 @@
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="subheader">PDS Files</div>
+                <div class="subheader">PDS 파일 목록</div>
                 <div class="h2 mb-0 mt-2">{{ project.pds_files|length }}</div>
             </div>
         </div>
@@ -60,10 +60,10 @@
     </div>
 </div>
 
-<!-- Analysis Capability Gauge -->
+<!-- 분석 능력 Gauge -->
 <div class="card mb-4" id="capability-card">
     <div class="card-header">
-        <h3 class="card-title"><i class="ti ti-gauge me-2 text-cyan"></i>Analysis Capability</h3>
+        <h3 class="card-title"><i class="ti ti-gauge me-2 text-cyan"></i>분석 능력</h3>
         <div class="card-actions">
             <span class="badge bg-cyan" id="capability-pct">--</span>
         </div>
@@ -72,7 +72,7 @@
         <!-- Overall gauge bar -->
         <div class="mb-3">
             <div class="d-flex justify-content-between mb-1">
-                <span class="fw-bold">Overall QC Power</span>
+                <span class="fw-bold">전체 QC 수준</span>
                 <span id="cap-level" class="text-muted">Loading...</span>
             </div>
             <div class="progress progress-lg" style="height:12px">
@@ -182,22 +182,22 @@
 
         <!-- Unlocked capabilities -->
         <div class="mt-3" id="cap-unlocked" style="display:none">
-            <div class="hr-text hr-text-left"><span class="text-green fw-bold"><i class="ti ti-lock-open me-1"></i>Unlocked Capabilities</span></div>
+            <div class="hr-text hr-text-left"><span class="text-green fw-bold"><i class="ti ti-lock-open me-1"></i>사용 가능한 기능</span></div>
             <div class="row g-1" id="cap-list"></div>
         </div>
 
         <!-- Locked (add more to unlock) -->
         <div class="mt-2" id="cap-locked" style="display:none">
-            <div class="hr-text hr-text-left"><span class="text-muted"><i class="ti ti-lock me-1"></i>Add files to unlock</span></div>
+            <div class="hr-text hr-text-left"><span class="text-muted"><i class="ti ti-lock me-1"></i>파일 추가 시 사용 가능</span></div>
             <div class="row g-1" id="cap-locked-list"></div>
         </div>
     </div>
 </div>
 
-<!-- PDS Files Table -->
+<!-- PDS 파일 목록 Table -->
 <div class="card mb-4">
     <div class="card-header">
-        <h3 class="card-title"><i class="ti ti-file me-2 text-cyan"></i>PDS Files</h3>
+        <h3 class="card-title"><i class="ti ti-file me-2 text-cyan"></i>PDS 파일 목록</h3>
     </div>
     <div class="table-responsive">
         <table class="table table-vcenter card-table">
@@ -233,15 +233,15 @@
 <!-- PDS Info Preview -->
 <div class="card mb-4" id="pds-info-card" style="display:none">
     <div class="card-header">
-        <h3 class="card-title"><i class="ti ti-info-circle me-2 text-blue"></i>PDS Information</h3>
+        <h3 class="card-title"><i class="ti ti-info-circle me-2 text-blue"></i>PDS 파일 정보</h3>
     </div>
     <div class="card-body" id="pds-info-body"></div>
 </div>
 
-<!-- Verification Dashboard (shown after PDS Analyze) -->
+<!-- 검증 대시보드 (shown after PDS Analyze) -->
 <div class="card mb-4" id="verify-card" style="display:none">
     <div class="card-header">
-        <h3 class="card-title"><i class="ti ti-shield-check me-2 text-green"></i>Verification Dashboard</h3>
+        <h3 class="card-title"><i class="ti ti-shield-check me-2 text-green"></i>검증 대시보드</h3>
     </div>
     <div class="card-body">
         <!-- Offset Comparison Table -->
@@ -250,9 +250,9 @@
         <!-- Motion Settings Status -->
         <div class="mb-3" id="verify-motion"></div>
 
-        <!-- Available Outputs Preview -->
+        <!-- 생성 가능한 결과물 Preview -->
         <div id="verify-outputs">
-            <div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-file-export me-1"></i>Available Outputs</span></div>
+            <div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-file-export me-1"></i>생성 가능한 결과물</span></div>
             <div class="row g-2" id="output-grid"></div>
         </div>
     </div>
@@ -264,7 +264,7 @@
     <div class="col-lg-6">
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-map-pin me-2 text-cyan"></i>Navigation Track</h3>
+                <h3 class="card-title"><i class="ti ti-map-pin me-2 text-cyan"></i>항적도</h3>
             </div>
             <div class="card-body p-0">
                 <div id="nav-map"></div>
@@ -275,7 +275,7 @@
     <div class="col-lg-6">
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-chart-dots me-2 text-blue"></i>Beam Depth Profile</h3>
+                <h3 class="card-title"><i class="ti ti-chart-dots me-2 text-blue"></i>빔 수심 프로파일</h3>
                 <div class="card-actions">
                     <button class="btn btn-sm btn-outline-cyan" id="prev-ping" onclick="changePing(-1)"><i class="ti ti-chevron-left"></i></button>
                     <span class="mx-2 small" id="ping-label">Ping 0</span>
@@ -287,42 +287,42 @@
             </div>
         </div>
     </div>
-    <!-- Attitude Time Series -->
+    <!-- 모션 시계열 -->
     <div class="col-12">
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-wave-sine me-2 text-green"></i>Attitude Time Series</h3>
+                <h3 class="card-title"><i class="ti ti-wave-sine me-2 text-green"></i>모션 시계열</h3>
             </div>
             <div class="card-body p-0">
                 <div id="attitude-chart" style="height:300px"></div>
             </div>
         </div>
     </div>
-    <!-- Line Statistics Table (GSF) -->
+    <!-- 라인별 수심 통계 Table (GSF) -->
     {% if project.gsf_dir %}
     <div class="col-12">
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title"><i class="ti ti-list-numbers me-2 text-yellow"></i>Line Statistics</h3>
+                <h3 class="card-title"><i class="ti ti-list-numbers me-2 text-yellow"></i>라인별 수심 통계</h3>
                 <div class="card-actions">
                     <button class="btn btn-sm btn-outline-yellow" onclick="loadLineStats()">
-                        <i class="ti ti-refresh me-1"></i>Load GSF Stats
+                        <i class="ti ti-refresh me-1"></i>GSF 라인 통계 로드
                     </button>
                 </div>
             </div>
             <div class="card-body p-0" id="line-stats-body">
-                <div class="p-3 text-muted">Click "Load GSF Stats" to analyze {{ project.gsf_dir }}</div>
+                <div class="p-3 text-muted">Click "GSF 라인 통계 로드" to analyze {{ project.gsf_dir }}</div>
             </div>
         </div>
     </div>
     {% endif %}
 </div>
 
-<!-- QC Results -->
+<!-- QC 결과 -->
 {% if jobs %}
 <div class="card mb-4">
     <div class="card-header">
-        <h3 class="card-title"><i class="ti ti-clipboard-check me-2 text-green"></i>QC Results</h3>
+        <h3 class="card-title"><i class="ti ti-clipboard-check me-2 text-green"></i>QC 결과</h3>
     </div>
     <div class="table-responsive">
         <table class="table table-vcenter card-table">
@@ -409,7 +409,7 @@ function analyzePds(path) {
         `;
         card.scrollIntoView({behavior: 'smooth'});
 
-        // === Render Verification Dashboard ===
+        // === Render 검증 대시보드 ===
         data._pds_path = path;  // pass path to dashboard
         renderVerificationDashboard(data);
     })
@@ -421,7 +421,7 @@ function renderVerificationDashboard(data) {
     vcard.style.display = 'block';
 
     // 1. Offset Comparison Table
-    let offsetHtml = '<div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-ruler me-1"></i>Sensor Offsets</span></div>';
+    let offsetHtml = '<div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-ruler me-1"></i>센서 오프셋</span></div>';
     offsetHtml += '<table class="table table-sm table-hover"><thead><tr><th>Sensor</th><th>X (m)</th><th>Y (m)</th><th>Z (m)</th><th>Status</th></tr></thead><tbody>';
 
     if (data.sensors) {
@@ -441,7 +441,7 @@ function renderVerificationDashboard(data) {
     const hasHvfDir = {{ 'true' if project.hvf_dir else 'false' }};
     if (hasHvfDir) {
         offsetHtml += `<button class="btn btn-sm btn-outline-green mt-2" onclick="verifyOffsets('${data._pds_path || ''}')">
-            <i class="ti ti-shield-check me-1"></i>Cross-validate with HVF
+            <i class="ti ti-shield-check me-1"></i>HVF 교차검증
         </button>`;
     } else {
         offsetHtml += '<div class="text-muted small mt-2"><i class="ti ti-info-circle me-1"></i>Add HVF or OffsetManager to enable cross-validation</div>';
@@ -454,16 +454,16 @@ function renderVerificationDashboard(data) {
 
     // 2. Motion & Settings Status
     const checks = [
-        { name: 'Roll Correction', on: data.apply_roll, icon: 'ti-rotate-clockwise' },
-        { name: 'Pitch Correction', on: data.apply_pitch, icon: 'ti-arrow-up' },
-        { name: 'Heave Correction', on: data.apply_heave, icon: 'ti-wave-sine' },
-        { name: 'SVP Applied', on: data.apply_svp, icon: 'ti-wave-square' },
+        { name: '롤 보정', on: data.apply_roll, icon: 'ti-rotate-clockwise' },
+        { name: '피치 보정', on: data.apply_pitch, icon: 'ti-arrow-up' },
+        { name: '히브 보정', on: data.apply_heave, icon: 'ti-wave-sine' },
+        { name: 'SVP 적용', on: data.apply_svp, icon: 'ti-wave-square' },
     ];
 
-    let motionHtml = '<div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-settings me-1"></i>Processing Settings</span></div>';
+    let motionHtml = '<div class="hr-text hr-text-left"><span class="fw-bold"><i class="ti ti-settings me-1"></i>처리 설정</span></div>';
     motionHtml += '<div class="row g-2">';
     for (const c of checks) {
-        const color = c.on ? 'green' : (c.name === 'SVP Applied' ? 'yellow' : 'red');
+        const color = c.on ? 'green' : (c.name === 'SVP 적용' ? 'yellow' : 'red');
         const label = c.on ? 'ON' : 'OFF';
         motionHtml += `<div class="col-6 col-lg-3">
             <div class="card card-sm">
@@ -513,28 +513,28 @@ function renderVerificationDashboard(data) {
     </div>`;
     motionHtml += '</div>';
     motionHtml += `<button class="btn btn-sm btn-outline-green mt-2" onclick="verifyMotion()">
-        <i class="ti ti-heartbeat me-1"></i>Analyze Motion Data
+        <i class="ti ti-heartbeat me-1"></i>모션 데이터 분석
     </button>`;
     motionHtml += '<div id="motion-result" class="mt-2"></div>';
     document.getElementById('verify-motion').innerHTML = motionHtml;
 
-    // 3. Available Outputs
+    // 3. 생성 가능한 결과물
     const hasGsf = {{ 'true' if project.gsf_dir else 'false' }};
     const hasHvf = {{ 'true' if project.hvf_dir else 'false' }};
 
     const outputs = [
-        { name: 'Pre-Processing Report', icon: 'ti-clipboard-check', available: true, desc: 'Settings validation (15 checks)', color: 'green' },
-        { name: 'Sensor Offset Table', icon: 'ti-ruler-2', available: true, desc: 'All offsets from PDS header', color: 'green' },
-        { name: 'Navigation Plot', icon: 'ti-map-pin', available: true, desc: 'Track line from PDS nav records', color: 'green' },
-        { name: 'Depth Profile', icon: 'ti-chart-area-line', available: true, desc: 'Beam depth across-track view', color: 'green' },
-        { name: 'Attitude Time Series', icon: 'ti-wave-sine', available: true, desc: 'Roll/Pitch/Heave from PDS attitude', color: 'green' },
-        { name: 'Motion QC Report', icon: 'ti-heartbeat', available: hasGsf, desc: hasGsf ? 'High-res 50Hz attitude analysis' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
-        { name: 'Roll Bias Analysis', icon: 'ti-arrows-left-right', available: hasGsf, desc: hasGsf ? 'Port/Stbd depth asymmetry' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
-        { name: 'Offset Cross-check', icon: 'ti-shield-check', available: hasHvf, desc: hasHvf ? 'PDS vs HVF comparison' : 'Add HVF to unlock', color: hasHvf ? 'green' : 'muted' },
-        { name: 'Coverage Map', icon: 'ti-map', available: hasGsf, desc: hasGsf ? 'Swath coverage with gaps' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
-        { name: 'DTM Surface', icon: 'ti-3d-cube-sphere', available: hasGsf, desc: hasGsf ? 'Bathymetric grid (GeoTIFF)' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
-        { name: 'DQR Presentation', icon: 'ti-presentation', available: hasGsf, desc: hasGsf ? 'Daily QC Report (10-slide PPT)' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
-        { name: 'Excel QC Report', icon: 'ti-table', available: true, desc: 'Summary statistics workbook', color: 'green' },
+        { name: '전처리 검증 보고서', icon: 'ti-clipboard-check', available: true, desc: '15개 설정 항목 검증', color: 'green' },
+        { name: '센서 오프셋 테이블', icon: 'ti-ruler-2', available: true, desc: 'PDS 헤더의 모든 오프셋', color: 'green' },
+        { name: '항적도', icon: 'ti-map-pin', available: true, desc: 'PDS 네비게이션 기반 항적', color: 'green' },
+        { name: '수심 프로파일', icon: 'ti-chart-area-line', available: true, desc: '빔별 수심 횡단면', color: 'green' },
+        { name: '모션 시계열', icon: 'ti-wave-sine', available: true, desc: 'PDS 모션 데이터 시계열', color: 'green' },
+        { name: '모션 QC 보고서', icon: 'ti-heartbeat', available: hasGsf, desc: hasGsf ? 'High-res 50Hz attitude analysis' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: '롤 바이어스 분석', icon: 'ti-arrows-left-right', available: hasGsf, desc: hasGsf ? 'Port/Stbd depth asymmetry' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: '오프셋 교차검증', icon: 'ti-shield-check', available: hasHvf, desc: hasHvf ? 'PDS vs HVF comparison' : 'Add HVF to unlock', color: hasHvf ? 'green' : 'muted' },
+        { name: '커버리지 맵', icon: 'ti-map', available: hasGsf, desc: hasGsf ? 'Swath coverage with gaps' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'DTM 서피스', icon: 'ti-3d-cube-sphere', available: hasGsf, desc: hasGsf ? 'Bathymetric grid (GeoTIFF)' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'DQR 프레젠테이션', icon: 'ti-presentation', available: hasGsf, desc: hasGsf ? 'Daily QC Report (10-slide PPT)' : 'Add GSF to unlock', color: hasGsf ? 'green' : 'muted' },
+        { name: 'Excel QC 보고서', icon: 'ti-table', available: true, desc: '통계 요약 엑셀', color: 'green' },
     ];
 
     let outHtml = '';
@@ -559,7 +559,7 @@ function renderVerificationDashboard(data) {
     document.getElementById('output-grid').innerHTML = `
         <div class="col-12 mb-2">
             <div class="d-flex justify-content-between mb-1">
-                <span class="small fw-bold">${availCount}/${outputs.length} outputs available</span>
+                <span class="small fw-bold">${availCount}/${outputs.length} 결과물 생성 가능</span>
                 <span class="small text-muted">${outPct}%</span>
             </div>
             <div class="progress" style="height:6px">
@@ -570,7 +570,7 @@ function renderVerificationDashboard(data) {
     `;
 }
 
-// ===== Analysis Capability Gauge =====
+// ===== 분석 능력 Gauge =====
 const CAP_TREE = {
     pds:   { weight: 40, label: 'PDS', capabilities: [
         'Settings Validation (Roll/Pitch/Heave ON/OFF)',
@@ -580,7 +580,7 @@ const CAP_TREE = {
         'Draft & Sealevel Check',
         'Navigation Continuity',
         'Beam Depth (TT-derived)',
-        'Attitude Time Series',
+        '모션 시계열',
         'Tide Records',
         'Ping Rate Analysis',
     ]},
@@ -657,12 +657,12 @@ function updateCapabilityGauge() {
     document.getElementById('cap-bar').style.width = pct + '%';
     document.getElementById('capability-pct').textContent = pct + '%';
 
-    let level = 'Basic Config Check';
+    let level = '기본 설정 확인';
     let barColor = 'bg-red';
-    if (pct >= 95) { level = 'Full Calibration Validation'; barColor = 'bg-green'; }
-    else if (pct >= 80) { level = 'Advanced Data QC'; barColor = 'bg-cyan'; }
-    else if (pct >= 60) { level = 'Standard QC'; barColor = 'bg-blue'; }
-    else if (pct >= 40) { level = 'Basic QC'; barColor = 'bg-yellow'; }
+    if (pct >= 95) { level = '완전 캘리브레이션 검증'; barColor = 'bg-green'; }
+    else if (pct >= 80) { level = '고급 데이터 QC'; barColor = 'bg-cyan'; }
+    else if (pct >= 60) { level = '표준 QC'; barColor = 'bg-blue'; }
+    else if (pct >= 40) { level = '기본 QC'; barColor = 'bg-yellow'; }
 
     document.getElementById('cap-level').textContent = level + ' (' + pct + '%)';
     document.getElementById('cap-bar').className = 'progress-bar ' + barColor;
@@ -834,7 +834,7 @@ function loadVisualizations(pdsPath) {
     _currentPing = 0;
     loadBeamProfile(pdsPath, 0);
 
-    // 3. Attitude Time Series
+    // 3. 모션 시계열
     fetch('/api/attitude-timeseries', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
