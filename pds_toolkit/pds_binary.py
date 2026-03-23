@@ -887,14 +887,49 @@ def read_pds_binary(
         warnings.warn(f"Failed to scan pings in {filepath}: {e}")
         return result
 
-    # 2. Parse each ping
+    # 2. Parse each ping with carry-forward for snippet-only pings
+    _prev_across = np.array([])
+    _prev_quality = np.array([])
+    _prev_rx_angle = np.array([])
+    _prev_backscatter = np.array([])
+
     try:
         with open(filepath, 'rb') as f:
             for idx, tt_off in enumerate(tt_offsets):
                 if load_arrays:
+                    # Read actual ping size (up to next ping or min_record_bytes)
+                    if idx + 1 < len(tt_offsets):
+                        actual_size = tt_offsets[idx + 1] - tt_off
+                    else:
+                        actual_size = min_record_bytes
+                    read_size = max(actual_size, min_record_bytes)
                     f.seek(tt_off)
-                    data = f.read(min_record_bytes)
+                    data = f.read(read_size)
                     ping = _parse_ping(data, tt_off, idx)
+
+                    # Carry-forward: snippet-only pings inherit from previous
+                    _has = lambda arr: len(arr) > 0 and np.any(arr != 0)
+
+                    if _has(ping.across_track) and np.sum(np.abs(ping.across_track) > 1.0) > 100:
+                        _prev_across = ping.across_track.copy()
+                    elif len(_prev_across) > 0:
+                        ping.across_track = _prev_across.copy()
+                        ping._across_source = 'carried_forward'
+
+                    if _has(ping.quality):
+                        _prev_quality = ping.quality.copy()
+                    elif len(_prev_quality) > 0:
+                        ping.quality = _prev_quality.copy()
+
+                    if _has(ping.rx_angle):
+                        _prev_rx_angle = ping.rx_angle.copy()
+                    elif len(_prev_rx_angle) > 0:
+                        ping.rx_angle = _prev_rx_angle.copy()
+
+                    if _has(ping.backscatter):
+                        _prev_backscatter = ping.backscatter.copy()
+                    elif len(_prev_backscatter) > 0:
+                        ping.backscatter = _prev_backscatter.copy()
                 else:
                     ts_off = tt_off + _TIMESTAMP_OFFSET
                     if ts_off + 8 <= result.file_size:
