@@ -133,7 +133,7 @@ setTimeout(() => location.reload(), 2000);
                     <td>{{ c.name }}</td>
                     <td><code>{{ c.pds_value }}</code></td>
                     <td>{{ c.reference_value or '—' }}</td>
-                    <td class="text-light small">{{ c.suggestion }}</td>
+                    <td class="text-white small">{{ c.suggestion }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -211,17 +211,17 @@ setTimeout(() => location.reload(), 2000);
         <div class="row">
             <div class="col-md-3">
                 <div class="subheader">Roll</div>
-                <div class="h3">{{ "%.3f"|format(m.roll_mean) }}° <span class="text-light fs-5">± {{ "%.3f"|format(m.roll_std) }}°</span></div>
+                <div class="h3">{{ "%.3f"|format(m.roll_mean) }}° <span class="text-white fs-5">± {{ "%.3f"|format(m.roll_std) }}°</span></div>
                 {% if m.roll_spikes > 0 %}<span class="badge bg-yellow">{{ m.roll_spikes }} spikes</span>{% endif %}
             </div>
             <div class="col-md-3">
                 <div class="subheader">Pitch</div>
-                <div class="h3">{{ "%.3f"|format(m.pitch_mean) }}° <span class="text-light fs-5">± {{ "%.3f"|format(m.pitch_std) }}°</span></div>
+                <div class="h3">{{ "%.3f"|format(m.pitch_mean) }}° <span class="text-white fs-5">± {{ "%.3f"|format(m.pitch_std) }}°</span></div>
                 {% if m.pitch_spikes > 0 %}<span class="badge bg-yellow">{{ m.pitch_spikes }} spikes</span>{% endif %}
             </div>
             <div class="col-md-3">
                 <div class="subheader">Heave</div>
-                <div class="h3">{{ "%.3f"|format(m.heave_mean) }}m <span class="text-light fs-5">± {{ "%.3f"|format(m.heave_std) }}m</span></div>
+                <div class="h3">{{ "%.3f"|format(m.heave_mean) }}m <span class="text-white fs-5">± {{ "%.3f"|format(m.heave_std) }}m</span></div>
                 {% if m.heave_spikes > 0 %}<span class="badge bg-yellow">{{ m.heave_spikes }} spikes</span>{% endif %}
             </div>
             <div class="col-md-3">
