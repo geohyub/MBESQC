@@ -442,6 +442,10 @@ function renderVerificationDashboard(data) {
         </div>
     </div>`;
     motionHtml += '</div>';
+    motionHtml += `<button class="btn btn-sm btn-outline-green mt-2" onclick="verifyMotion()">
+        <i class="ti ti-heartbeat me-1"></i>Analyze Motion Data
+    </button>`;
+    motionHtml += '<div id="motion-result" class="mt-2"></div>';
     document.getElementById('verify-motion').innerHTML = motionHtml;
 
     // 3. Available Outputs
@@ -613,6 +617,94 @@ function updateCapabilityGauge() {
 }
 
 document.addEventListener('DOMContentLoaded', updateCapabilityGauge);
+
+function verifyMotion() {
+    const pdsPath = window._lastPdsPath;
+    if (!pdsPath) { alert('Analyze a PDS file first'); return; }
+
+    const resultDiv = document.getElementById('motion-result');
+    resultDiv.innerHTML = '<div class="spinner-border spinner-border-sm text-cyan me-2"></div>Analyzing motion data...';
+
+    fetch('/api/verify-motion', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ pds_path: pdsPath, max_pings: 30 })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { resultDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`; return; }
+
+        let html = '';
+
+        // Navigation summary
+        const nav = data.nav;
+        if (nav.total > 0) {
+            const spd = nav.speed || {};
+            html += `<div class="alert alert-info p-2 mb-2">
+                <strong>Navigation:</strong> ${nav.total} records
+                ${spd.knots_mean ? ` | ${spd.knots_mean} kn (${spd.mean} m/s)` : ''}
+                ${nav.gaps && nav.gaps.length > 0 ? ` | <span class="text-danger">${nav.gaps.length} gap(s)!</span>` : ' | No gaps'}
+            </div>`;
+        }
+
+        // Attitude cards
+        const att = data.attitude;
+        if (att.total > 0) {
+            html += `<div class="row g-2 mb-2">`;
+            for (const [ch, label, unit, icon] of [
+                ['roll', 'Roll', '°', 'ti-rotate-clockwise'],
+                ['pitch', 'Pitch', '°', 'ti-arrow-up'],
+                ['heave', 'Heave', 'm', 'ti-wave-sine'],
+                ['heading', 'Heading', '°', 'ti-compass'],
+            ]) {
+                const s = att[ch] || {};
+                if (!s.min && s.min !== 0) continue;
+                const spikes = s.spike_count || 0;
+                const hasDrift = Math.abs(s.drift_rate || 0) > 0.5;
+                const color = spikes > 0 ? 'red' : hasDrift ? 'yellow' : 'green';
+
+                html += `<div class="col-6 col-lg-3">
+                    <div class="card card-sm border-${color}">
+                        <div class="card-body p-2">
+                            <div class="d-flex align-items-center mb-1">
+                                <i class="ti ${icon} me-1 text-${color}"></i>
+                                <span class="fw-bold small">${label}</span>
+                                <span class="badge bg-${color} ms-auto">${spikes > 0 ? spikes + ' spikes' : hasDrift ? 'drift' : 'OK'}</span>
+                            </div>
+                            <div class="small">
+                                <span class="text-muted">Range:</span> ${s.min.toFixed(2)}${unit} ~ ${s.max.toFixed(2)}${unit}<br>
+                                <span class="text-muted">Mean:</span> ${s.mean.toFixed(3)}${unit} ± ${s.std.toFixed(3)}
+                                ${s.drift_rate ? `<br><span class="text-muted">Drift:</span> ${s.drift_rate.toFixed(3)}${unit}` : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+            html += '</div>';
+        }
+
+        // Ping depth
+        const ping = data.ping;
+        if (ping.total > 0 && ping.depth_range && ping.depth_range.length === 2) {
+            html += `<div class="alert alert-success p-2 mb-2">
+                <strong>Depth:</strong> ${ping.depth_range[0].toFixed(1)} ~ ${ping.depth_range[1].toFixed(1)}m
+                | ${ping.total} pings @ ${ping.rate_hz} Hz
+                | Tide: ${data.tide.total} records
+            </div>`;
+        }
+
+        // Issues
+        for (const issue of data.issues) {
+            const alertType = issue.level === 'PASS' ? 'success' : issue.level === 'WARN' ? 'warning' : 'danger';
+            html += `<div class="alert alert-${alertType} p-2 mb-1">
+                <strong>[${issue.level}]</strong> ${issue.category}: ${issue.message}
+            </div>`;
+        }
+
+        resultDiv.innerHTML = html;
+    })
+    .catch(e => { resultDiv.innerHTML = `<div class="alert alert-danger">${e}</div>`; });
+}
 
 function verifyOffsets(pdsPath) {
     if (!pdsPath && window._lastPdsPath) pdsPath = window._lastPdsPath;

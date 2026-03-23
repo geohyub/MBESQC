@@ -379,6 +379,174 @@ def api_verify_offsets():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/verify-motion", methods=["POST"])
+def api_verify_motion():
+    """Analyze motion data from PDS for spikes, gaps, and drift."""
+    try:
+        import numpy as np
+        data = request.json
+        pds_path = data.get("pds_path", "")
+        max_pings = data.get("max_pings", 20)
+
+        if not os.path.isfile(pds_path):
+            return jsonify({"error": "PDS file not found"}), 400
+
+        from pds_toolkit import read_pds_binary
+        pds = read_pds_binary(pds_path, max_pings=max_pings)
+
+        result = {
+            "nav": {"total": 0, "gaps": [], "speed": {}},
+            "attitude": {"total": 0, "roll": {}, "pitch": {}, "heave": {}, "heading": {}, "spikes": []},
+            "tide": {"total": 0, "range": {}},
+            "ping": {"total": 0, "rate_hz": 0, "depth_range": []},
+            "issues": [],
+        }
+
+        # Navigation analysis
+        if pds.navigation:
+            nav = pds.navigation
+            result["nav"]["total"] = len(nav)
+            lats = [r.latitude for r in nav if r.latitude != 0]
+            lons = [r.longitude for r in nav if r.longitude != 0]
+            if lats:
+                result["nav"]["lat_range"] = [min(lats), max(lats)]
+                result["nav"]["lon_range"] = [min(lons), max(lons)]
+
+            # Speed from consecutive positions
+            speeds = []
+            for i in range(1, len(nav)):
+                dt = (nav[i].timestamp - nav[i-1].timestamp) / 1000.0
+                if dt > 0 and dt < 10:
+                    dlat = (nav[i].latitude - nav[i-1].latitude) * 111320
+                    dlon = (nav[i].longitude - nav[i-1].longitude) * 111320 * np.cos(np.radians(nav[i].latitude))
+                    dist = np.sqrt(dlat**2 + dlon**2)
+                    speeds.append(dist / dt)
+            if speeds:
+                result["nav"]["speed"] = {
+                    "min": round(min(speeds), 2),
+                    "max": round(max(speeds), 2),
+                    "mean": round(np.mean(speeds), 2),
+                    "knots_mean": round(np.mean(speeds) * 1.944, 2),
+                }
+
+            # Gap detection
+            for i in range(1, len(nav)):
+                dt = (nav[i].timestamp - nav[i-1].timestamp) / 1000.0
+                if dt > 5.0:  # > 5 seconds = gap
+                    result["nav"]["gaps"].append({
+                        "index": i,
+                        "duration_sec": round(dt, 1),
+                    })
+
+            if result["nav"]["gaps"]:
+                result["issues"].append({
+                    "level": "WARN",
+                    "category": "Navigation",
+                    "message": f"{len(result['nav']['gaps'])} navigation gap(s) detected (>{5}s)",
+                })
+
+        # Attitude analysis
+        if pds.attitude:
+            att = pds.attitude
+            result["attitude"]["total"] = len(att)
+
+            rolls = [a.roll for a in att if hasattr(a, 'roll')]
+            pitches = [a.pitch for a in att if hasattr(a, 'pitch')]
+            heaves = [a.heave for a in att if hasattr(a, 'heave')]
+            headings = [a.heading for a in att if hasattr(a, 'heading')]
+
+            def _stats(vals, name):
+                if not vals:
+                    return {}
+                arr = np.array(vals)
+                s = {
+                    "min": round(float(arr.min()), 4),
+                    "max": round(float(arr.max()), 4),
+                    "mean": round(float(arr.mean()), 4),
+                    "std": round(float(arr.std()), 4),
+                }
+
+                # Spike detection: values > 3*std from mean
+                mean, std = arr.mean(), arr.std()
+                if std > 0:
+                    spikes_idx = np.where(np.abs(arr - mean) > 3 * std)[0]
+                    s["spike_count"] = int(len(spikes_idx))
+                    if len(spikes_idx) > 0:
+                        for si in spikes_idx[:5]:
+                            result["attitude"]["spikes"].append({
+                                "channel": name,
+                                "index": int(si),
+                                "value": round(float(arr[si]), 4),
+                                "threshold": round(float(mean + 3 * std), 4),
+                            })
+                else:
+                    s["spike_count"] = 0
+
+                # Drift detection: linear trend
+                if len(arr) > 10:
+                    x = np.arange(len(arr))
+                    coeffs = np.polyfit(x, arr, 1)
+                    s["drift_rate"] = round(float(coeffs[0]) * len(arr), 4)  # total drift over period
+                    if abs(s["drift_rate"]) > 0.5:  # > 0.5° or 0.5m drift
+                        result["issues"].append({
+                            "level": "WARN",
+                            "category": "Attitude",
+                            "message": f"{name} drift detected: {s['drift_rate']:.4f}° over {len(arr)} samples",
+                        })
+                return s
+
+            result["attitude"]["roll"] = _stats(rolls, "Roll")
+            result["attitude"]["pitch"] = _stats(pitches, "Pitch")
+            result["attitude"]["heave"] = _stats(heaves, "Heave")
+            result["attitude"]["heading"] = _stats(headings, "Heading")
+
+            # Report spikes
+            total_spikes = sum(result["attitude"][ch].get("spike_count", 0) for ch in ["roll", "pitch", "heave"])
+            if total_spikes > 0:
+                result["issues"].append({
+                    "level": "WARN",
+                    "category": "Attitude",
+                    "message": f"{total_spikes} attitude spike(s) detected (>3σ)",
+                })
+
+        # Tide analysis
+        if hasattr(pds, 'tide') and pds.tide:
+            tide = pds.tide
+            result["tide"]["total"] = len(tide)
+            values = [t.value for t in tide if hasattr(t, 'value')]
+            if values:
+                result["tide"]["range"] = {
+                    "min": round(min(values), 3),
+                    "max": round(max(values), 3),
+                    "mean": round(np.mean(values), 3),
+                }
+        elif hasattr(pds, 'num_tide_records'):
+            result["tide"]["total"] = pds.num_tide_records
+
+        # Ping summary
+        valid_pings = [p for p in pds.pings if len(p.depth) > 0 and np.any(p.depth != 0)]
+        result["ping"]["total"] = len(valid_pings)
+        result["ping"]["rate_hz"] = round(pds.ping_rate_hz, 2) if pds.ping_rate_hz else 0
+
+        if valid_pings:
+            all_depths = np.concatenate([np.abs(p.depth[p.depth != 0]) for p in valid_pings])
+            if len(all_depths) > 0:
+                result["ping"]["depth_range"] = [round(float(all_depths.min()), 2), round(float(all_depths.max()), 2)]
+
+        if not result["issues"]:
+            result["issues"].append({
+                "level": "PASS",
+                "category": "All",
+                "message": "No motion anomalies detected",
+            })
+
+        return jsonify(result)
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/om-configs")
 def api_om_configs():
     """List OffsetManager vessel configs."""
