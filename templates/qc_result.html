@@ -1,19 +1,19 @@
 {% extends "base.html" %}
-{% block title %}QC Result #{{ job.id }}{% endblock %}
+{% block title %}QC 결과 #{{ job.id }}{% endblock %}
 
 {% block page_header %}
 <div class="row align-items-center">
     <div class="col-auto">
         <h2 class="page-title">
-            <i class="ti ti-clipboard-check me-2"></i>QC Result #{{ job.id }}
+            <i class="ti ti-clipboard-check me-2"></i>QC 결과 #{{ job.id }}
         </h2>
         <div class="page-subtitle">{{ job.pds_path | basename }}</div>
     </div>
     <div class="col-auto ms-auto d-flex gap-2">
         {% if job.status == 'done' %}
-        <a href="/api/download/{{ job.id }}/excel" class="btn btn-green"><i class="ti ti-file-spreadsheet me-1"></i>Excel</a>
-        <a href="/api/download/{{ job.id }}/word" class="btn btn-blue"><i class="ti ti-file-text me-1"></i>Word</a>
-        <a href="/api/download/{{ job.id }}/ppt" class="btn btn-orange"><i class="ti ti-presentation me-1"></i>PPT</a>
+        <a href="/api/download/{{ job.id }}/excel" class="btn btn-green"><i class="ti ti-file-spreadsheet me-1"></i>Excel 보고서</a>
+        <a href="/api/download/{{ job.id }}/word" class="btn btn-blue"><i class="ti ti-file-text me-1"></i>Word 보고서</a>
+        <a href="/api/download/{{ job.id }}/ppt" class="btn btn-orange"><i class="ti ti-presentation me-1"></i>DQR PPT</a>
         {% endif %}
         <a href="/new-qc" class="btn btn-outline-cyan"><i class="ti ti-plus me-1"></i>New QC</a>
     </div>
@@ -46,7 +46,7 @@ setTimeout(() => location.reload(), 2000);
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="subheader">Vessel</div>
+                <div class="subheader">선박명</div>
                 <div class="h2 mb-0 mt-2">{{ r.vessel_name or '—' }}</div>
             </div>
         </div>
@@ -54,7 +54,7 @@ setTimeout(() => location.reload(), 2000);
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="subheader">Pings / Beams</div>
+                <div class="subheader">핑 수 / 빔 수</div>
                 <div class="h2 mb-0 mt-2">{{ "{:,}".format(r.total_pings) }} <span class="fs-5" style="color:#cbd5e1">/ {{ "{:,}".format(r.total_beams) }}</span></div>
             </div>
         </div>
@@ -62,7 +62,7 @@ setTimeout(() => location.reload(), 2000);
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="subheader">Depth Range</div>
+                <div class="subheader">수심 범위</div>
                 <div class="h2 mb-0 mt-2">{{ "%.1f"|format(r.depth_range[0]|abs) }} — {{ "%.1f"|format(r.depth_range[1]|abs) }} <span class="fs-5" style="color:#cbd5e1">m</span></div>
             </div>
         </div>
@@ -70,7 +70,7 @@ setTimeout(() => location.reload(), 2000);
     <div class="col-sm-6 col-lg-3">
         <div class="card">
             <div class="card-body">
-                <div class="subheader">Pre-Processing</div>
+                <div class="subheader">전처리 검증</div>
                 {% if r.preprocess %}
                 {% set pp = r.preprocess %}
                 <div class="h2 mb-0 mt-2">
@@ -101,18 +101,18 @@ setTimeout(() => location.reload(), 2000);
 {% if r.preprocess and r.preprocess.checks %}
 <div class="card mb-4">
     <div class="card-header">
-        <h3 class="card-title"><i class="ti ti-shield-check me-2 text-cyan"></i>Pre-Processing Validation</h3>
+        <h3 class="card-title"><i class="ti ti-shield-check me-2 text-cyan"></i>전처리 검증 결과</h3>
     </div>
     <div class="table-responsive">
         <table class="table table-vcenter card-table">
             <thead>
                 <tr>
-                    <th>Status</th>
-                    <th>Category</th>
-                    <th>Check</th>
-                    <th>PDS Value</th>
-                    <th>Reference</th>
-                    <th>Action</th>
+                    <th>상태</th>
+                    <th>분류</th>
+                    <th>검사 항목</th>
+                    <th>PDS 값</th>
+                    <th>참조값</th>
+                    <th>조치 사항</th>
                 </tr>
             </thead>
             <tbody>

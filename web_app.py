@@ -978,7 +978,29 @@ def api_download(job_id, fmt):
     path = file_map.get(fmt)
     if path and path.exists():
         return send_file(str(path), as_attachment=True)
-    return jsonify({"error": f"File not found: {fmt}"}), 404
+
+    # Try generating report on-demand if result exists
+    if job.get("result") and fmt in file_map:
+        try:
+            from mbes_qc.pds_qc import run_pds_qc
+            os.makedirs(str(out), exist_ok=True)
+
+            if fmt == "excel":
+                from mbes_qc.report import generate_excel_report
+                generate_excel_report(job["result"], str(file_map["excel"]))
+            elif fmt == "word":
+                from mbes_qc.report import generate_word_report
+                generate_word_report(job["result"], str(file_map["word"]))
+            elif fmt == "ppt":
+                from mbes_qc.dqr_ppt import generate_dqr_ppt
+                generate_dqr_ppt(job["result"], str(file_map["ppt"]))
+
+            if file_map[fmt].exists():
+                return send_file(str(file_map[fmt]), as_attachment=True)
+        except Exception as e:
+            return jsonify({"error": f"Report generation failed: {e}"}), 500
+
+    return jsonify({"error": f"파일을 찾을 수 없습니다: {fmt}"}), 404
 
 
 # ── Background QC Job ──────────────────────────────────────
