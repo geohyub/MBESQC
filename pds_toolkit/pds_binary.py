@@ -425,7 +425,8 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
             ping.backscatter = arr
 
     # Across-track: try multiple known offsets
-    _ACROSS_OFFSETS = [_ACROSS_TRACK_OFFSET, 61440, 135168, 170632]
+    # Across-track offsets by ping type:
+    _ACROSS_OFFSETS = [_ACROSS_TRACK_OFFSET, 61440, 135168, 170632, 20480]
     for a_off in _ACROSS_OFFSETS:
         if len(ping.across_track) > 0 and np.any(ping.across_track != 0):
             break
@@ -450,7 +451,14 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
     # Extra-snippet (174K): 167936 (block 41)
     # Medium pings (72K): 53248 (block 13)
     # Small pings (67K): via dynamic detection
-    _DEPTH_OFFSETS = [_DEPTH_OFFSET, 122880, 126976, 167936, 172032, 53248, 57344]
+    # Depth offsets by ping type:
+    # EDF/JAKO/Bada standard (67K): via dynamic detection
+    # EDF/JAKO/Bada big (139K): 122880 (block 30)
+    # Sinan extra-snippet (174K): 167936 (block 41)
+    # EDF 72K snippet-only: 53248 (block 13)
+    # Geumhwa 45K: 28672 (block 7)
+    # Geumhwa 139K: 135168 (block 33) across, depth computed from TT
+    _DEPTH_OFFSETS = [_DEPTH_OFFSET, 122880, 126976, 167936, 172032, 53248, 57344, 28672]
     for d_off in _DEPTH_OFFSETS:
         if len(ping.depth) > 0 and np.any(ping.depth != 0):
             break
