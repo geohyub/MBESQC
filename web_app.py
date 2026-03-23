@@ -753,6 +753,150 @@ def api_line_stats():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/crossline-compare", methods=["POST"])
+def api_crossline_compare():
+    """Compare depth at cross-line intersection points."""
+    try:
+        import numpy as np
+        data = request.json
+        gsf_dir = data.get("gsf_dir", "")
+        max_pings = data.get("max_pings", 100)
+        cell_size = data.get("cell_size", 5.0)  # grid cell for intersection
+
+        if not os.path.isdir(gsf_dir):
+            return jsonify({"error": "GSF 디렉토리를 찾을 수 없습니다"}), 400
+
+        from pds_toolkit import read_gsf
+        gsf_files = sorted([f for f in os.listdir(gsf_dir) if f.endswith('.gsf')])
+
+        if len(gsf_files) < 2:
+            return jsonify({"error": "교차 비교에 최소 2개 GSF 라인이 필요합니다"}), 400
+
+        # Load all lines with beam positions
+        lines = []
+        for gf in gsf_files[:30]:
+            try:
+                gsf_path = os.path.join(gsf_dir, gf)
+                gsf = read_gsf(gsf_path, max_pings=max_pings)
+                if not gsf.pings:
+                    continue
+
+                line_data = {"name": gf, "cells": {}}
+
+                for p in gsf.pings:
+                    lat = getattr(p, 'latitude', 0)
+                    lon = getattr(p, 'longitude', 0)
+                    if lat == 0 or lon == 0:
+                        continue
+                    if not hasattr(p, 'depth') or len(p.depth) == 0:
+                        continue
+
+                    # Nadir depth
+                    nadir_idx = len(p.depth) // 2
+                    depth = float(abs(p.depth[nadir_idx]))
+                    if depth < 0.5:
+                        continue
+
+                    # Grid cell key
+                    cell_x = int(lon / (cell_size / 111320))
+                    cell_y = int(lat / (cell_size / 111320))
+                    key = f"{cell_x},{cell_y}"
+
+                    if key not in line_data["cells"]:
+                        line_data["cells"][key] = []
+                    line_data["cells"][key].append(depth)
+
+                if line_data["cells"]:
+                    # Average depth per cell
+                    line_data["cell_means"] = {
+                        k: float(np.mean(v)) for k, v in line_data["cells"].items()
+                    }
+                    lines.append(line_data)
+            except Exception:
+                continue
+
+        # Find intersections (cells that appear in 2+ lines)
+        intersections = []
+        for i in range(len(lines)):
+            for j in range(i + 1, len(lines)):
+                common_cells = set(lines[i]["cell_means"].keys()) & set(lines[j]["cell_means"].keys())
+                for cell in common_cells:
+                    d1 = lines[i]["cell_means"][cell]
+                    d2 = lines[j]["cell_means"][cell]
+                    diff = d1 - d2
+                    intersections.append({
+                        "line1": lines[i]["name"],
+                        "line2": lines[j]["name"],
+                        "cell": cell,
+                        "depth1": round(d1, 3),
+                        "depth2": round(d2, 3),
+                        "diff": round(diff, 3),
+                        "abs_diff": round(abs(diff), 3),
+                    })
+
+        if not intersections:
+            return jsonify({
+                "intersections": [],
+                "stats": None,
+                "iho": None,
+                "message": "교차점이 발견되지 않았습니다. 셀 크기를 늘려보세요.",
+            })
+
+        # Statistics
+        diffs = np.array([x["abs_diff"] for x in intersections])
+        stats = {
+            "num_intersections": len(intersections),
+            "mean_diff": round(float(diffs.mean()), 4),
+            "std_diff": round(float(diffs.std()), 4),
+            "max_diff": round(float(diffs.max()), 4),
+            "rms_diff": round(float(np.sqrt(np.mean(diffs ** 2))), 4),
+            "p95_diff": round(float(np.percentile(diffs, 95)), 4),
+        }
+
+        # IHO S-44 Assessment
+        # Use mean depth for IHO calculation
+        mean_depth = float(np.mean([x["depth1"] for x in intersections]))
+
+        iho_orders = {
+            "Special": {"a": 0.25, "b": 0.0075},
+            "1a": {"a": 0.5, "b": 0.013},
+            "1b": {"a": 0.5, "b": 0.013},
+            "2": {"a": 1.0, "b": 0.023},
+        }
+
+        iho_results = {}
+        for order, params in iho_orders.items():
+            tvu = np.sqrt(params["a"] ** 2 + (params["b"] * mean_depth) ** 2)
+            passed = stats["p95_diff"] <= tvu * 2  # 95% CI
+            iho_results[order] = {
+                "tvu_limit": round(tvu, 3),
+                "passed": passed,
+                "margin": round(tvu * 2 - stats["p95_diff"], 3),
+            }
+
+        # Best passing order
+        best_order = "불합격"
+        for order in ["Special", "1a", "1b", "2"]:
+            if iho_results[order]["passed"]:
+                best_order = f"IHO {order}"
+                break
+
+        result = {
+            "intersections": sorted(intersections, key=lambda x: -x["abs_diff"])[:50],
+            "stats": stats,
+            "iho": iho_results,
+            "best_order": best_order,
+            "mean_depth": round(mean_depth, 1),
+            "num_lines": len(lines),
+        }
+
+        return jsonify(result)
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route("/api/om-configs")
 def api_om_configs():
     """List OffsetManager vessel configs."""
