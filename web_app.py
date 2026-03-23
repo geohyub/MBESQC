@@ -412,7 +412,7 @@ def _run_qc_job(job: dict) -> None:
             lat_range=tuple(job.get("lat_range", (-90, 90))),
             lon_range=tuple(job.get("lon_range", (-180, 180))),
             cell_size=job.get("cell_size", 5.0),
-            generate_reports=True,
+            generate_reports=False,  # reports generated on-demand via download API
         )
 
         # Serialize result for template
@@ -431,18 +431,30 @@ def _run_qc_job(job: dict) -> None:
         job["traceback"] = traceback.format_exc()
 
 
+def _safe_float(v):
+    """Convert numpy/nan/inf to JSON-safe Python float."""
+    import math
+    try:
+        f = float(v)
+        if math.isnan(f) or math.isinf(f):
+            return 0.0
+        return round(f, 6)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _serialize_result(result) -> dict:
     """Convert PdsQcResult to JSON-safe dict."""
     d = {
         "vessel_name": result.vessel_name,
-        "total_pings": result.total_pings,
-        "total_beams": result.total_beams,
-        "depth_range": list(result.depth_range),
-        "lat_range": list(result.lat_range),
-        "lon_range": list(result.lon_range),
-        "nav_records": result.nav_records,
-        "attitude_records": result.attitude_records,
-        "elapsed_sec": result.elapsed_sec,
+        "total_pings": int(result.total_pings),
+        "total_beams": int(result.total_beams),
+        "depth_range": [_safe_float(x) for x in result.depth_range],
+        "lat_range": [_safe_float(x) for x in result.lat_range],
+        "lon_range": [_safe_float(x) for x in result.lon_range],
+        "nav_records": int(result.nav_records),
+        "attitude_records": int(result.attitude_records),
+        "elapsed_sec": _safe_float(result.elapsed_sec),
     }
 
     # Pre-processing checks
@@ -467,40 +479,67 @@ def _serialize_result(result) -> dict:
 
     # Swath lines summary
     if result.swath_lines:
-        d["lines"] = []
+        d["lines"] = {
+            "num_lines": len(result.swath_lines),
+            "details": [],
+        }
         for sw in result.swath_lines:
-            d["lines"].append({
+            d["lines"]["details"].append({
                 "name": sw.line_name,
                 "format": sw.source_format,
-                "pings": sw.num_pings,
-                "heading": sw.mean_heading,
-                "depth": sw.mean_depth,
-                "duration": sw.duration_seconds,
+                "pings": int(sw.num_pings),
+                "heading": _safe_float(sw.mean_heading),
+                "depth": _safe_float(sw.mean_depth),
+                "duration": _safe_float(sw.duration_seconds),
             })
 
     # Motion QC summary
     if hasattr(result, 'motion_qc') and result.motion_qc:
         mq = result.motion_qc
         d["motion"] = {
-            "roll_mean": getattr(mq, 'roll_mean', 0),
-            "roll_std": getattr(mq, 'roll_std', 0),
-            "pitch_mean": getattr(mq, 'pitch_mean', 0),
-            "pitch_std": getattr(mq, 'pitch_std', 0),
-            "heave_mean": getattr(mq, 'heave_mean', 0),
-            "heave_std": getattr(mq, 'heave_std', 0),
-            "heading_mean": getattr(mq, 'heading_mean', 0),
-            "roll_spikes": getattr(mq, 'roll_spikes', 0),
-            "pitch_spikes": getattr(mq, 'pitch_spikes', 0),
-            "heave_spikes": getattr(mq, 'heave_spikes', 0),
+            "roll_mean": _safe_float(getattr(mq, 'roll_mean', 0)),
+            "roll_std": _safe_float(getattr(mq, 'roll_std', 0)),
+            "roll_min": _safe_float(getattr(mq, 'roll_min', 0)),
+            "roll_max": _safe_float(getattr(mq, 'roll_max', 0)),
+            "pitch_mean": _safe_float(getattr(mq, 'pitch_mean', 0)),
+            "pitch_std": _safe_float(getattr(mq, 'pitch_std', 0)),
+            "pitch_min": _safe_float(getattr(mq, 'pitch_min', 0)),
+            "pitch_max": _safe_float(getattr(mq, 'pitch_max', 0)),
+            "heave_mean": _safe_float(getattr(mq, 'heave_mean', 0)),
+            "heave_std": _safe_float(getattr(mq, 'heave_std', 0)),
+            "heave_min": _safe_float(getattr(mq, 'heave_min', 0)),
+            "heave_max": _safe_float(getattr(mq, 'heave_max', 0)),
+            "heading_mean": _safe_float(getattr(mq, 'heading_mean', 0)),
+            "attitude_records": int(getattr(mq, 'total_samples', 0)),
+            "roll_spikes": int(getattr(mq, 'roll_spikes', 0)),
+            "pitch_spikes": int(getattr(mq, 'pitch_spikes', 0)),
+            "heave_spikes": int(getattr(mq, 'heave_spikes', 0)),
         }
 
-    # PDS computed records (projected coords, speed, heading)
+    # Beam stats
+    d["beam_stats"] = {
+        "total_pings": int(result.total_pings),
+        "beams_per_ping": int(getattr(result, 'beams_per_ping', 0)),
+        "depth_min": _safe_float(result.depth_range[0]) if result.depth_range else 0,
+        "depth_max": _safe_float(result.depth_range[1]) if len(result.depth_range) > 1 else 0,
+    }
+
+    # Offset QC
+    if hasattr(result, 'offset_qc') and result.offset_qc:
+        oq = result.offset_qc
+        d["offset_qc"] = {
+            "roll_bias": _safe_float(getattr(oq, 'roll_bias', 0)),
+            "roll_bias_std": _safe_float(getattr(oq, 'roll_bias_std', 0)),
+            "roll_status": getattr(oq, 'roll_status', 'N/A'),
+        }
+
+    # PDS computed records
     if hasattr(result, 'computed') and result.computed:
         d["computed_count"] = len(result.computed)
 
     # Tide records
     if hasattr(result, 'tide_records'):
-        d["tide_records"] = result.tide_records
+        d["tide_records"] = int(result.tide_records)
 
     return d
 
