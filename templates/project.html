@@ -311,7 +311,23 @@
                 </div>
             </div>
             <div class="card-body p-0" id="line-stats-body">
-                <div class="p-3 text-muted">Click "GSF 라인 통계 로드" to analyze {{ project.gsf_dir }}</div>
+                <div class="p-3 text-muted">"GSF 라인 통계 로드"를 클릭하여 분석을 시작하세요</div>
+            </div>
+        </div>
+    </div>
+    <!-- Cross-line Comparison -->
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title"><i class="ti ti-arrows-cross me-2 text-red"></i>교차라인 수심 비교</h3>
+                <div class="card-actions">
+                    <button class="btn btn-sm btn-outline-red" onclick="loadCrossline()">
+                        <i class="ti ti-analyze me-1"></i>교차 비교 실행
+                    </button>
+                </div>
+            </div>
+            <div class="card-body" id="crossline-body">
+                <div class="text-muted">"교차 비교 실행"을 클릭하면 GSF 라인 간 교차점을 분석합니다</div>
             </div>
         </div>
     </div>
@@ -897,6 +913,80 @@ function loadBeamProfile(pdsPath, pingIdx) {
                       colorbar: { title: 'm', titlefont: {color: '#e2e8f0'}, tickfont: {color: '#e2e8f0'} } },
         }], layout, { responsive: true, displayModeBar: false });
     }).catch(() => {});
+}
+
+function loadCrossline() {
+    const body = document.getElementById('crossline-body');
+    body.innerHTML = '<div class="spinner-border spinner-border-sm text-red me-2"></div>교차점 분석 중...';
+
+    fetch('/api/crossline-compare', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ gsf_dir: '{{ project.gsf_dir or "" }}', max_pings: 100, cell_size: 20.0 })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { body.innerHTML = `<div class="alert alert-danger">${data.error}</div>`; return; }
+        if (!data.stats) { body.innerHTML = `<div class="alert alert-info">${data.message || '교차점이 발견되지 않았습니다'}</div>`; return; }
+
+        let html = '';
+
+        // IHO S-44 판정 카드
+        if (data.iho) {
+            html += `<div class="alert alert-${data.best_order.includes('불합격') ? 'danger' : 'success'} mb-3">
+                <div class="d-flex align-items-center">
+                    <div class="h1 mb-0 me-3">${data.best_order.includes('불합격') ? '❌' : '✅'}</div>
+                    <div>
+                        <h4 class="alert-title">${data.best_order}</h4>
+                        <div>교차점 ${data.stats.num_intersections}개 | 평균수심 ${data.mean_depth}m | P95 수심차 ${data.stats.p95_diff}m</div>
+                    </div>
+                </div>
+            </div>`;
+
+            html += '<div class="row g-2 mb-3">';
+            for (const [order, r] of Object.entries(data.iho)) {
+                const color = r.passed ? 'green' : 'red';
+                html += `<div class="col-3"><div class="card card-sm border-${color}">
+                    <div class="card-body p-2 text-center">
+                        <div class="fw-bold">IHO ${order}</div>
+                        <div class="badge bg-${color}">${r.passed ? '합격' : '불합격'}</div>
+                        <div class="small text-muted">TVU=${r.tvu_limit}m</div>
+                    </div>
+                </div></div>`;
+            }
+            html += '</div>';
+        }
+
+        // 통계 테이블
+        const s = data.stats;
+        html += `<table class="table table-sm"><tbody>
+            <tr><td>평균 수심차</td><td class="text-end"><strong>${s.mean_diff}m</strong></td></tr>
+            <tr><td>표준편차</td><td class="text-end">${s.std_diff}m</td></tr>
+            <tr><td>최대 수심차</td><td class="text-end">${s.max_diff}m</td></tr>
+            <tr><td>RMS</td><td class="text-end">${s.rms_diff}m</td></tr>
+            <tr><td>95백분위</td><td class="text-end">${s.p95_diff}m</td></tr>
+        </tbody></table>`;
+
+        // 교차점 상세 (상위 10개)
+        if (data.intersections && data.intersections.length > 0) {
+            html += '<h4 class="mt-3">수심차 상위 교차점</h4>';
+            html += '<table class="table table-sm"><thead><tr><th>라인 1</th><th>라인 2</th><th class="text-end">수심1</th><th class="text-end">수심2</th><th class="text-end">차이</th></tr></thead><tbody>';
+            for (const x of data.intersections.slice(0, 10)) {
+                const diffColor = Math.abs(x.diff) > 0.5 ? 'text-red' : 'text-green';
+                html += `<tr>
+                    <td><code>${x.line1.substring(0, 30)}</code></td>
+                    <td><code>${x.line2.substring(0, 30)}</code></td>
+                    <td class="text-end">${x.depth1.toFixed(1)}m</td>
+                    <td class="text-end">${x.depth2.toFixed(1)}m</td>
+                    <td class="text-end ${diffColor}"><strong>${x.diff > 0 ? '+' : ''}${x.diff.toFixed(3)}m</strong></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+        }
+
+        body.innerHTML = html;
+    })
+    .catch(e => { body.innerHTML = `<div class="alert alert-danger">${e}</div>`; });
 }
 
 function loadLineStats() {
