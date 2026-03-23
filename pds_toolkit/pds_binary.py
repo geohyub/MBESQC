@@ -430,8 +430,10 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
                 ping.across_track = arr
                 break
 
-    # Depth: try multiple known offsets (varies by ping size)
-    _DEPTH_OFFSETS = [_DEPTH_OFFSET, 122880, 126976]
+    # Depth: try multiple known offsets (varies by ping size and snippet count)
+    # EDF/Bada 139K pings: 122880 (block 30)
+    # Sinan 174K pings: 167936 (block 41) — 11 extra snippet blocks
+    _DEPTH_OFFSETS = [_DEPTH_OFFSET, 122880, 126976, 167936, 172032]
     for d_off in _DEPTH_OFFSETS:
         if len(ping.depth) > 0 and np.any(ping.depth != 0):
             break
