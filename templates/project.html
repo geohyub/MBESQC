@@ -427,6 +427,45 @@
                             <input type="text" class="form-control" name="fau_dir" value="{{ project.fau_dir or '' }}">
                         </div>
                     </div>
+                    <!-- OffsetManager 연동 -->
+                    <div class="row mb-3">
+                        <div class="col-12">
+                            <label class="form-label">
+                                <i class="ti ti-ruler-measure"></i> OffsetManager DB 경로
+                                <span class="text-muted ms-1" style="font-size:0.8em">(offsets.db)</span>
+                            </label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" name="offset_db_path" id="offsetDbPath"
+                                       value="{{ project.offset_db_path or '' }}"
+                                       placeholder="E:\Software\GeoView_Suite\OffsetManager\offsets.db">
+                                <button type="button" class="btn btn-outline-cyan" onclick="loadVesselConfigs()">
+                                    <i class="ti ti-refresh"></i> 불러오기
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row mb-3" id="vesselConfigRow" style="display:none">
+                        <div class="col-12">
+                            <label class="form-label">
+                                <i class="ti ti-ship"></i> Vessel Configuration 선택
+                            </label>
+                            <select class="form-select" name="offset_config_id" id="vesselConfigSelect">
+                                <option value="">-- 선택하세요 --</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="sensorPreview" style="display:none" class="mb-3">
+                        <label class="form-label"><i class="ti ti-list-details"></i> 센서 오프셋 미리보기</label>
+                        <div class="table-responsive" style="max-height:200px;overflow-y:auto">
+                            <table class="table table-sm table-hover" id="sensorTable">
+                                <thead><tr>
+                                    <th>타입</th><th>센서명</th><th>X</th><th>Y</th><th>Z</th>
+                                    <th>Roll</th><th>Pitch</th><th>Heading</th>
+                                </tr></thead>
+                                <tbody></tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn" data-bs-dismiss="modal">취소</button>
@@ -1231,6 +1270,67 @@ function runProjectQc(projectId, fileIdx) {
         }, 1000);
     })
     .catch(e => alert('Error: ' + e));
+}
+
+// ── OffsetManager 연동 ──
+function loadVesselConfigs() {
+    const dbPath = document.getElementById('offsetDbPath').value;
+    if (!dbPath) { alert('OffsetManager DB 경로를 입력하세요.'); return; }
+
+    fetch('/api/om-configs?db_path=' + encodeURIComponent(dbPath))
+    .then(r => r.json())
+    .then(configs => {
+        const sel = document.getElementById('vesselConfigSelect');
+        sel.innerHTML = '<option value="">-- 선택하세요 --</option>';
+
+        if (configs.length === 0) {
+            sel.innerHTML += '<option disabled>DB에 설정이 없습니다</option>';
+        } else {
+            configs.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = `${c.vessel_name} — ${c.project_name} (${c.config_date})`;
+                sel.appendChild(opt);
+            });
+        }
+
+        document.getElementById('vesselConfigRow').style.display = '';
+        sel.onchange = () => loadSensorPreview(sel.value, dbPath);
+    })
+    .catch(e => alert('OffsetManager DB를 읽을 수 없습니다: ' + e));
+}
+
+function loadSensorPreview(configId, dbPath) {
+    if (!configId) { document.getElementById('sensorPreview').style.display = 'none'; return; }
+
+    fetch('/api/om-sensors/' + configId + '?db_path=' + encodeURIComponent(dbPath))
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { alert(data.error); return; }
+
+        const tbody = document.querySelector('#sensorTable tbody');
+        tbody.innerHTML = '';
+
+        data.sensors.forEach(s => {
+            const tr = document.createElement('tr');
+            const typeClass = {
+                'MRU': 'text-green', 'IMU': 'text-green',
+                'MBES Transducer': 'text-cyan', 'GPS': 'text-yellow',
+                'SBP Transducer': 'text-purple', 'Other': 'text-muted'
+            }[s.type] || 'text-white';
+
+            tr.innerHTML = `
+                <td><span class="${typeClass}">${s.type_ko}</span></td>
+                <td>${s.name}</td>
+                <td>${s.x.toFixed(3)}</td><td>${s.y.toFixed(3)}</td><td>${s.z.toFixed(3)}</td>
+                <td>${s.roll.toFixed(3)}</td><td>${s.pitch.toFixed(3)}</td><td>${s.heading.toFixed(3)}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        document.getElementById('sensorPreview').style.display = '';
+    })
+    .catch(e => alert('센서 정보를 읽을 수 없습니다: ' + e));
 }
 </script>
 {% endblock %}

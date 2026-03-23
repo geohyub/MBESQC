@@ -143,6 +143,13 @@ def edit_project(project_id):
         project["fau_dir"] = data["fau_dir"]
     if "om_config_id" in data:
         project["om_config_id"] = data["om_config_id"]
+    if "offset_db_path" in data:
+        project["offset_db_path"] = data["offset_db_path"]
+    if "offset_config_id" in data:
+        try:
+            project["offset_config_id"] = int(data["offset_config_id"]) if data["offset_config_id"] else None
+        except (ValueError, TypeError):
+            project["offset_config_id"] = None
 
     # Re-scan PDS files if dir changed
     if data.get("pds_dir") and Path(data["pds_dir"]).is_dir():
@@ -948,8 +955,9 @@ def api_crossline_compare():
 
 @app.route("/api/om-configs")
 def api_om_configs():
-    """List OffsetManager vessel configs."""
-    return jsonify(_load_om_configs())
+    """List OffsetManager vessel configs. Optional ?db_path= param."""
+    db_path = request.args.get("db_path", OM_DB_PATH)
+    return jsonify(_load_om_configs(db_path))
 
 
 @app.route("/api/om-sensors/<int:config_id>")
@@ -957,7 +965,8 @@ def api_om_sensors(config_id):
     """Get sensor offsets for a specific OffsetManager config."""
     try:
         import sqlite3
-        conn = sqlite3.connect(OM_DB_PATH)
+        db_path = request.args.get("db_path", OM_DB_PATH)
+        conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
 
         # Config info
@@ -1352,12 +1361,13 @@ def _serialize_result(result) -> dict:
 
 # ── Helpers ────────────────────────────────────────────────
 
-def _load_om_configs() -> list[dict]:
-    """Load OffsetManager vessel configs."""
-    if not os.path.exists(OM_DB_PATH):
+def _load_om_configs(db_path: str = None) -> list[dict]:
+    """Load OffsetManager vessel configs from given or default DB path."""
+    path = db_path or OM_DB_PATH
+    if not os.path.exists(path):
         return []
     try:
-        conn = sqlite3.connect(OM_DB_PATH)
+        conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT id, vessel_name, project_name, config_date FROM vessel_configs ORDER BY updated_at DESC"
