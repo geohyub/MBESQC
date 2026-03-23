@@ -340,6 +340,7 @@ function analyzePds(path) {
         card.scrollIntoView({behavior: 'smooth'});
 
         // === Render Verification Dashboard ===
+        data._pds_path = path;  // pass path to dashboard
         renderVerificationDashboard(data);
     })
     .catch(e => alert('Error: ' + e));
@@ -367,8 +368,19 @@ function renderVerificationDashboard(data) {
         }
     }
     offsetHtml += '</tbody></table>';
-    offsetHtml += '<div class="text-muted small"><i class="ti ti-info-circle me-1"></i>Add HVF or OffsetManager to enable cross-validation</div>';
+    const hasHvfDir = {{ 'true' if project.hvf_dir else 'false' }};
+    if (hasHvfDir) {
+        offsetHtml += `<button class="btn btn-sm btn-outline-green mt-2" onclick="verifyOffsets('${data._pds_path || ''}')">
+            <i class="ti ti-shield-check me-1"></i>Cross-validate with HVF
+        </button>`;
+    } else {
+        offsetHtml += '<div class="text-muted small mt-2"><i class="ti ti-info-circle me-1"></i>Add HVF or OffsetManager to enable cross-validation</div>';
+    }
+    offsetHtml += '<div id="verify-result" class="mt-2"></div>';
     document.getElementById('verify-offsets').innerHTML = offsetHtml;
+
+    // Store pds path for verify button
+    window._lastPdsPath = data._pds_path;
 
     // 2. Motion & Settings Status
     const checks = [
@@ -601,6 +613,93 @@ function updateCapabilityGauge() {
 }
 
 document.addEventListener('DOMContentLoaded', updateCapabilityGauge);
+
+function verifyOffsets(pdsPath) {
+    if (!pdsPath && window._lastPdsPath) pdsPath = window._lastPdsPath;
+    if (!pdsPath) { alert('No PDS file selected'); return; }
+
+    const resultDiv = document.getElementById('verify-result');
+    resultDiv.innerHTML = '<div class="spinner-border spinner-border-sm text-cyan me-2"></div>Verifying...';
+
+    fetch('/api/verify-offsets', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            pds_path: pdsPath,
+            hvf_dir: '{{ project.hvf_dir or "" }}',
+            om_config_id: '{{ project.om_config_id or "" }}',
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.error) { resultDiv.innerHTML = `<div class="alert alert-danger">${data.error}</div>`; return; }
+
+        let html = '';
+
+        // HVF comparison table
+        if (data.hvf_comparison) {
+            html += `<div class="alert alert-info p-2 mb-2"><strong>HVF:</strong> ${data.hvf_comparison.file}</div>`;
+
+            // Sensor-by-sensor comparison
+            if (Object.keys(data.hvf_comparison.sensors).length > 0) {
+                html += '<table class="table table-sm"><thead><tr><th>Sensor</th><th>Source</th><th>X</th><th>Y</th><th>Z</th><th>Match</th></tr></thead><tbody>';
+                for (const [name, pds_xyz] of Object.entries(data.pds_offsets)) {
+                    const hvf = data.hvf_comparison.sensors[name];
+                    html += `<tr class="bg-blue-lt"><td rowspan="2"><strong>${name}</strong></td><td>PDS</td>
+                        <td>${pds_xyz.x.toFixed(3)}</td><td>${pds_xyz.y.toFixed(3)}</td><td>${pds_xyz.z.toFixed(3)}</td>
+                        <td rowspan="2">`;
+                    if (hvf) {
+                        const dx = Math.abs(pds_xyz.x - hvf.x);
+                        const dy = Math.abs(pds_xyz.y - hvf.y);
+                        const dz = Math.abs(pds_xyz.z - hvf.z);
+                        const match = dx < 0.01 && dy < 0.01 && dz < 0.01;
+                        html += match ? '<span class="badge bg-green">MATCH</span>' : `<span class="badge bg-red">DIFF Δ(${dx.toFixed(3)},${dy.toFixed(3)},${dz.toFixed(3)})</span>`;
+                    } else {
+                        html += '<span class="badge bg-yellow">NOT IN HVF</span>';
+                    }
+                    html += `</td></tr>`;
+                    if (hvf) {
+                        html += `<tr><td>HVF</td><td>${hvf.x.toFixed(3)}</td><td>${hvf.y.toFixed(3)}</td><td>${hvf.z.toFixed(3)}</td></tr>`;
+                    } else {
+                        html += `<tr><td>HVF</td><td colspan="3">—</td></tr>`;
+                    }
+                }
+                html += '</tbody></table>';
+            }
+
+            // Calibration comparison
+            html += '<div class="row g-2 mb-2">';
+            const calChecks = [
+                { name: 'Roll Cal', pds: data.static_roll, hvf: data.hvf_comparison.mount_roll },
+                { name: 'Pitch Cal', pds: data.static_pitch, hvf: data.hvf_comparison.mount_pitch },
+            ];
+            for (const c of calChecks) {
+                const diff = Math.abs(c.pds - c.hvf);
+                const match = diff < 0.01;
+                html += `<div class="col-6"><div class="card card-sm p-2">
+                    <div class="fw-bold small">${c.name}</div>
+                    <div>PDS: <strong>${c.pds.toFixed(4)}°</strong> → HVF: <strong>${c.hvf.toFixed(4)}°</strong></div>
+                    <span class="badge bg-${match ? 'green' : 'yellow'}">${match ? 'MATCH' : 'Δ=' + diff.toFixed(4) + '°'}</span>
+                </div></div>`;
+            }
+            html += '</div>';
+        }
+
+        // Issues summary
+        if (data.issues && data.issues.length > 0) {
+            for (const issue of data.issues) {
+                const color = issue.level === 'PASS' ? 'green' : issue.level === 'WARN' ? 'yellow' : 'red';
+                html += `<div class="alert alert-${color === 'green' ? 'success' : color === 'yellow' ? 'warning' : 'danger'} p-2 mb-1">
+                    <strong>[${issue.level}]</strong> ${issue.sensor}: ${issue.message}
+                    ${issue.delta ? `<span class="text-muted ms-2">${issue.delta}</span>` : ''}
+                </div>`;
+            }
+        }
+
+        resultDiv.innerHTML = html;
+    })
+    .catch(e => { resultDiv.innerHTML = `<div class="alert alert-danger">${e}</div>`; });
+}
 
 function runProjectQc(projectId, fileIdx) {
     if (!confirm('Run QC for this file?')) return;

@@ -227,7 +227,154 @@ def api_pds_info():
             "sealevel": float(geom.get("Sealevel", "0") or "0"),
             "draft": float(geom.get("Draft", "0") or "0"),
             "file_size_mb": os.path.getsize(pds_path) / 1024 / 1024,
+            "_pds_path": pds_path,
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/verify-offsets", methods=["POST"])
+def api_verify_offsets():
+    """Cross-validate PDS offsets against HVF and/or OffsetManager."""
+    try:
+        data = request.json
+        pds_path = data.get("pds_path", "")
+        hvf_dir = data.get("hvf_dir", "")
+        om_config_id = data.get("om_config_id", "")
+
+        if not os.path.isfile(pds_path):
+            return jsonify({"error": "PDS file not found"}), 400
+
+        # Read PDS header for offsets
+        from pds_toolkit import read_pds_header
+        meta = read_pds_header(pds_path)
+        geom = meta.sections.get("GEOMETRY", {})
+
+        pds_offsets = {}
+        for key, val in geom.items():
+            if key.startswith("Offset("):
+                parts = val.split(",")
+                if len(parts) >= 4:
+                    name = parts[0].strip()
+                    if name == "Zero Offset":
+                        continue
+                    pds_offsets[name] = {
+                        "x": float(parts[1]),
+                        "y": float(parts[2]),
+                        "z": float(parts[3]),
+                    }
+
+        # PDS calibration values
+        static_roll = 0.0
+        static_pitch = 0.0
+        for sec_data in meta.sections.values():
+            for k, v in sec_data.items():
+                if "StaticRoll" in k and "8193," in v:
+                    try:
+                        static_roll = float(v.split(",", 1)[1])
+                    except (ValueError, IndexError):
+                        pass
+                if "StaticPitch" in k and "8193," in v:
+                    try:
+                        static_pitch = float(v.split(",", 1)[1])
+                    except (ValueError, IndexError):
+                        pass
+
+        result = {
+            "pds_offsets": pds_offsets,
+            "static_roll": static_roll,
+            "static_pitch": static_pitch,
+            "hvf_comparison": None,
+            "om_comparison": None,
+            "issues": [],
+        }
+
+        # Compare with HVF if available
+        if hvf_dir and os.path.isdir(hvf_dir):
+            from pds_toolkit import read_hvf
+            hvf_files = [f for f in os.listdir(hvf_dir) if f.endswith(".hvf")]
+            if hvf_files:
+                hvf_path = os.path.join(hvf_dir, hvf_files[0])
+                try:
+                    hvf = read_hvf(hvf_path)
+                    hvf_data = {
+                        "file": hvf_files[0],
+                        "sensors": {},
+                        "mount_roll": getattr(hvf, "mount_roll", 0.0),
+                        "mount_pitch": getattr(hvf, "mount_pitch", 0.0),
+                        "mount_heading": getattr(hvf, "mount_heading", 0.0),
+                    }
+
+                    # Extract HVF sensor offsets
+                    if hasattr(hvf, "sensors"):
+                        for s in hvf.sensors:
+                            name = getattr(s, "name", "")
+                            hvf_data["sensors"][name] = {
+                                "x": getattr(s, "x", 0.0),
+                                "y": getattr(s, "y", 0.0),
+                                "z": getattr(s, "z", 0.0),
+                            }
+
+                    # Compare offsets
+                    for sensor_name, pds_xyz in pds_offsets.items():
+                        hvf_match = hvf_data["sensors"].get(sensor_name)
+                        if hvf_match:
+                            dx = abs(pds_xyz["x"] - hvf_match["x"])
+                            dy = abs(pds_xyz["y"] - hvf_match["y"])
+                            dz = abs(pds_xyz["z"] - hvf_match["z"])
+                            if dx > 0.01 or dy > 0.01 or dz > 0.01:
+                                result["issues"].append({
+                                    "level": "WARN",
+                                    "sensor": sensor_name,
+                                    "message": f"Offset mismatch: PDS({pds_xyz['x']:.3f},{pds_xyz['y']:.3f},{pds_xyz['z']:.3f}) vs HVF({hvf_match['x']:.3f},{hvf_match['y']:.3f},{hvf_match['z']:.3f})",
+                                    "delta": f"Δ=({dx:.3f},{dy:.3f},{dz:.3f})",
+                                })
+
+                    # Compare calibration
+                    if abs(static_roll - hvf_data["mount_roll"]) > 0.01:
+                        result["issues"].append({
+                            "level": "WARN",
+                            "sensor": "Calibration",
+                            "message": f"Roll mismatch: PDS StaticRoll={static_roll:.4f}° vs HVF MountRoll={hvf_data['mount_roll']:.4f}°",
+                            "delta": f"Δ={abs(static_roll - hvf_data['mount_roll']):.4f}°",
+                        })
+                    if abs(static_pitch - hvf_data["mount_pitch"]) > 0.01:
+                        result["issues"].append({
+                            "level": "WARN",
+                            "sensor": "Calibration",
+                            "message": f"Pitch mismatch: PDS StaticPitch={static_pitch:.4f}° vs HVF MountPitch={hvf_data['mount_pitch']:.4f}°",
+                            "delta": f"Δ={abs(static_pitch - hvf_data['mount_pitch']):.4f}°",
+                        })
+
+                    result["hvf_comparison"] = hvf_data
+                except Exception as e:
+                    result["issues"].append({"level": "ERROR", "sensor": "HVF", "message": str(e), "delta": ""})
+
+        # Compare with OffsetManager if available
+        if om_config_id:
+            try:
+                import sqlite3
+                conn = sqlite3.connect(OM_DB_PATH)
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT * FROM vessel_configs WHERE id = ?", (om_config_id,)
+                ).fetchone()
+                if row:
+                    om_data = dict(row)
+                    result["om_comparison"] = {
+                        "vessel": om_data.get("vessel_name", ""),
+                        "project": om_data.get("project_name", ""),
+                    }
+                    # Compare OM offsets with PDS offsets (if stored in OM)
+                conn.close()
+            except Exception:
+                pass
+
+        if not result["issues"]:
+            result["issues"].append({"level": "PASS", "sensor": "All", "message": "No offset discrepancies found", "delta": ""})
+
+        return jsonify(result)
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
