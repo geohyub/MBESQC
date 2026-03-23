@@ -172,6 +172,52 @@ def api_om_configs():
     return jsonify(_load_om_configs())
 
 
+@app.route("/api/scan-folders", methods=["POST"])
+def api_scan_folders():
+    """Scan companion folders for matching files by timestamp."""
+    data = request.json or {}
+    pds_path = _validate_pds_path(data.get("pds_path", ""))
+    if not pds_path:
+        return jsonify({"error": "Invalid PDS path"}), 400
+
+    # Extract timestamp from PDS filename
+    stem = Path(pds_path).stem
+    import re
+    ts_match = re.search(r'(\d{8})-?(\d{6})', stem)
+    pds_ts = f"{ts_match.group(1)}-{ts_match.group(2)}" if ts_match else ""
+
+    found = {}
+    for folder_key in ["gsf_dir", "hvf_dir", "s7k_dir", "fau_dir"]:
+        folder = data.get(folder_key, "")
+        if not folder or not Path(folder).is_dir():
+            continue
+
+        ext_map = {
+            "gsf_dir": [".gsf"],
+            "hvf_dir": [".hvf"],
+            "s7k_dir": [".s7k"],
+            "fau_dir": [".fau"],
+        }
+        exts = ext_map.get(folder_key, [])
+        matches = []
+        for f in Path(folder).iterdir():
+            if f.suffix.lower() in exts:
+                # Check timestamp match
+                f_ts = re.search(r'(\d{8})-?(\d{6})', f.stem)
+                matched = False
+                if pds_ts and f_ts:
+                    matched = f_ts.group(1) == ts_match.group(1)  # same date
+                matches.append({
+                    "name": f.name,
+                    "size_mb": f.stat().st_size / 1024 / 1024,
+                    "matched": matched,
+                })
+        if matches:
+            found[folder_key] = sorted(matches, key=lambda x: x["name"])
+
+    return jsonify({"pds_timestamp": pds_ts, "found": found})
+
+
 @app.route("/api/run-qc", methods=["POST"])
 def api_run_qc():
     """Start QC job in background thread."""
@@ -325,6 +371,30 @@ def _serialize_result(result) -> dict:
                 "depth": sw.mean_depth,
                 "duration": sw.duration_seconds,
             })
+
+    # Motion QC summary
+    if hasattr(result, 'motion_qc') and result.motion_qc:
+        mq = result.motion_qc
+        d["motion"] = {
+            "roll_mean": getattr(mq, 'roll_mean', 0),
+            "roll_std": getattr(mq, 'roll_std', 0),
+            "pitch_mean": getattr(mq, 'pitch_mean', 0),
+            "pitch_std": getattr(mq, 'pitch_std', 0),
+            "heave_mean": getattr(mq, 'heave_mean', 0),
+            "heave_std": getattr(mq, 'heave_std', 0),
+            "heading_mean": getattr(mq, 'heading_mean', 0),
+            "roll_spikes": getattr(mq, 'roll_spikes', 0),
+            "pitch_spikes": getattr(mq, 'pitch_spikes', 0),
+            "heave_spikes": getattr(mq, 'heave_spikes', 0),
+        }
+
+    # PDS computed records (projected coords, speed, heading)
+    if hasattr(result, 'computed') and result.computed:
+        d["computed_count"] = len(result.computed)
+
+    # Tide records
+    if hasattr(result, 'tide_records'):
+        d["tide_records"] = result.tide_records
 
     return d
 
