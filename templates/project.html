@@ -50,6 +50,140 @@
     </div>
 </div>
 
+<!-- Analysis Capability Gauge -->
+<div class="card mb-4" id="capability-card">
+    <div class="card-header">
+        <h3 class="card-title"><i class="ti ti-gauge me-2 text-cyan"></i>Analysis Capability</h3>
+        <div class="card-actions">
+            <span class="badge bg-cyan" id="capability-pct">--</span>
+        </div>
+    </div>
+    <div class="card-body">
+        <!-- Overall gauge bar -->
+        <div class="mb-3">
+            <div class="d-flex justify-content-between mb-1">
+                <span class="fw-bold">Overall QC Power</span>
+                <span id="cap-level" class="text-muted">Loading...</span>
+            </div>
+            <div class="progress progress-lg" style="height:12px">
+                <div class="progress-bar bg-cyan" id="cap-bar" style="width:0%"></div>
+            </div>
+        </div>
+
+        <!-- Data source checklist -->
+        <div class="row g-2" id="cap-sources">
+            <!-- PDS -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-pds">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-green-lt me-2"><i class="ti ti-check"></i></span>
+                        <div>
+                            <div class="fw-bold small">PDS</div>
+                            <div class="text-muted" style="font-size:11px">Settings + Binary Data</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- GSF -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-gsf">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-muted me-2" id="gsf-icon"><i class="ti ti-plus"></i></span>
+                        <div>
+                            <div class="fw-bold small">GSF</div>
+                            <div class="text-muted" style="font-size:11px">Beam-level QC, Attitude 50Hz</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- HVF -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-hvf">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-muted me-2" id="hvf-icon"><i class="ti ti-plus"></i></span>
+                        <div>
+                            <div class="fw-bold small">HVF</div>
+                            <div class="text-muted" style="font-size:11px">Offset Cross-validation</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- OffsetManager -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-om">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-muted me-2" id="om-icon"><i class="ti ti-plus"></i></span>
+                        <div>
+                            <div class="fw-bold small">OffsetManager</div>
+                            <div class="text-muted" style="font-size:11px">History + Correction Suggest</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- S7K -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-s7k">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-muted me-2" id="s7k-icon"><i class="ti ti-plus"></i></span>
+                        <div>
+                            <div class="fw-bold small">S7K Raw</div>
+                            <div class="text-muted" style="font-size:11px">Raw vs Processed Compare</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- SVP -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-svp">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-muted me-2" id="svp-icon"><i class="ti ti-plus"></i></span>
+                        <div>
+                            <div class="fw-bold small">SVP File</div>
+                            <div class="text-muted" style="font-size:11px">SVP Suitability Check</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- Cross-line -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-xline">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-muted me-2" id="xline-icon"><i class="ti ti-plus"></i></span>
+                        <div>
+                            <div class="fw-bold small">Cross-line</div>
+                            <div class="text-muted" style="font-size:11px">Calibration Validation</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <!-- FAU -->
+            <div class="col-6 col-lg-4 col-xl-3">
+                <div class="card card-sm border" id="src-fau">
+                    <div class="card-body d-flex align-items-center p-2">
+                        <span class="avatar avatar-sm bg-muted me-2" id="fau-icon"><i class="ti ti-plus"></i></span>
+                        <div>
+                            <div class="fw-bold small">FAU</div>
+                            <div class="text-muted" style="font-size:11px">Tide-corrected Depth QC</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Unlocked capabilities -->
+        <div class="mt-3" id="cap-unlocked" style="display:none">
+            <div class="hr-text hr-text-left"><span class="text-green fw-bold"><i class="ti ti-lock-open me-1"></i>Unlocked Capabilities</span></div>
+            <div class="row g-1" id="cap-list"></div>
+        </div>
+
+        <!-- Locked (add more to unlock) -->
+        <div class="mt-2" id="cap-locked" style="display:none">
+            <div class="hr-text hr-text-left"><span class="text-muted"><i class="ti ti-lock me-1"></i>Add files to unlock</span></div>
+            <div class="row g-1" id="cap-locked-list"></div>
+        </div>
+    </div>
+</div>
+
 <!-- PDS Files Table -->
 <div class="card mb-4">
     <div class="card-header">
@@ -187,6 +321,124 @@ function analyzePds(path) {
     })
     .catch(e => alert('Error: ' + e));
 }
+
+// ===== Analysis Capability Gauge =====
+const CAP_TREE = {
+    pds:   { weight: 40, label: 'PDS', capabilities: [
+        'Settings Validation (Roll/Pitch/Heave ON/OFF)',
+        'SVP Application Check',
+        'Sensor Offset Extraction',
+        'Calibration Values (StaticRoll/Pitch)',
+        'Draft & Sealevel Check',
+        'Navigation Continuity',
+        'Beam Depth (TT-derived)',
+        'Attitude Time Series',
+        'Tide Records',
+        'Ping Rate Analysis',
+    ]},
+    gsf:   { weight: 20, label: 'GSF', capabilities: [
+        'Beam-level Across-Track (100%)',
+        'High-res Attitude (50Hz)',
+        'Roll Bias Estimation (port/stbd asymmetry)',
+        'Pitch Bias Estimation (reciprocal lines)',
+        'SVP Profiles Embedded',
+        'IHO S-44 Depth Accuracy',
+        'Beam Quality Flags',
+    ]},
+    hvf:   { weight: 10, label: 'HVF', capabilities: [
+        'PDS vs HVF Offset Cross-check',
+        'MountAngle vs StaticRoll/Pitch Comparison',
+        'Sensor Offset History Tracking',
+    ]},
+    om:    { weight: 7, label: 'OffsetManager', capabilities: [
+        'Recorded vs Applied Offset Validation',
+        'Correction Value Suggestion',
+        'Multi-vessel Offset DB Lookup',
+    ]},
+    s7k:   { weight: 5, label: 'S7K', capabilities: [
+        'Raw vs Processed Depth Comparison',
+        'Motion Pre/Post Correction Compare',
+    ]},
+    svp:   { weight: 5, label: 'SVP File', capabilities: [
+        'SVP Time/Location Suitability',
+        'Outer Beam Depth Impact Estimation',
+    ]},
+    xline: { weight: 8, label: 'Cross-line', capabilities: [
+        'Cross-line Depth Difference Statistics',
+        'Heading Bias Estimation',
+        'Calibration Residual Analysis',
+    ]},
+    fau:   { weight: 5, label: 'FAU', capabilities: [
+        'Tide-corrected Depth Verification',
+        'Final Deliverable Depth QC',
+    ]},
+};
+
+function updateCapabilityGauge() {
+    const has = {
+        pds: {{ project.pds_files|length }} > 0,
+        gsf: {{ 'true' if project.gsf_dir else 'false' }},
+        hvf: {{ 'true' if project.hvf_dir else 'false' }},
+        om:  {{ 'true' if project.om_config_id else 'false' }},
+        s7k: {{ 'true' if project.s7k_dir else 'false' }},
+        svp: false,
+        xline: false,
+        fau: {{ 'true' if project.fau_dir else 'false' }},
+    };
+
+    let total = 0, max = 0;
+    const unlocked = [], locked = [];
+
+    for (const [key, cfg] of Object.entries(CAP_TREE)) {
+        max += cfg.weight;
+        const iconEl = document.getElementById(key + '-icon');
+        const srcEl = document.getElementById('src-' + key);
+
+        if (has[key]) {
+            total += cfg.weight;
+            if (iconEl) { iconEl.className = 'avatar avatar-sm bg-green-lt me-2'; iconEl.innerHTML = '<i class="ti ti-check"></i>'; }
+            if (srcEl) srcEl.style.borderColor = '#2fb344';
+            cfg.capabilities.forEach(c => unlocked.push(c));
+        } else if (key !== 'pds') {
+            if (iconEl) { iconEl.className = 'avatar avatar-sm bg-muted me-2'; iconEl.innerHTML = '<i class="ti ti-plus"></i>'; }
+            cfg.capabilities.forEach(c => locked.push({cap: c, src: cfg.label, w: cfg.weight}));
+        }
+    }
+
+    const pct = Math.round(total / max * 100);
+    document.getElementById('cap-bar').style.width = pct + '%';
+    document.getElementById('capability-pct').textContent = pct + '%';
+
+    let level = 'Basic Config Check';
+    let barColor = 'bg-red';
+    if (pct >= 95) { level = 'Full Calibration Validation'; barColor = 'bg-green'; }
+    else if (pct >= 80) { level = 'Advanced Data QC'; barColor = 'bg-cyan'; }
+    else if (pct >= 60) { level = 'Standard QC'; barColor = 'bg-blue'; }
+    else if (pct >= 40) { level = 'Basic QC'; barColor = 'bg-yellow'; }
+
+    document.getElementById('cap-level').textContent = level + ' (' + pct + '%)';
+    document.getElementById('cap-bar').className = 'progress-bar ' + barColor;
+
+    // Unlocked list
+    if (unlocked.length > 0) {
+        document.getElementById('cap-unlocked').style.display = 'block';
+        document.getElementById('cap-list').innerHTML = unlocked.map(c =>
+            `<div class="col-6 col-lg-4"><span class="badge bg-green-lt text-green mb-1" style="font-size:11px"><i class="ti ti-check me-1"></i>${c}</span></div>`
+        ).join('');
+    }
+
+    // Locked list (top 5 by weight)
+    locked.sort((a,b) => b.w - a.w);
+    const topLocked = locked.slice(0, 8);
+    if (topLocked.length > 0) {
+        document.getElementById('cap-locked').style.display = 'block';
+        document.getElementById('cap-locked-list').innerHTML = topLocked.map(l =>
+            `<div class="col-6 col-lg-4"><span class="badge bg-muted-lt text-muted mb-1" style="font-size:11px"><i class="ti ti-lock me-1"></i>${l.cap} <span class="text-cyan">(+${l.src})</span></span></div>`
+        ).join('');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', updateCapabilityGauge);
 
 function runProjectQc(projectId, fileIdx) {
     if (!confirm('Run QC for this file?')) return;
