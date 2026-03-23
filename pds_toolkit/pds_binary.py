@@ -417,15 +417,31 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
         if np.all(np.isfinite(arr)) and np.all(arr >= 0) and np.all(arr < 100000):
             ping.backscatter = arr
 
-    if data_len >= _ACROSS_TRACK_OFFSET + _NUM_BEAMS * 4:
-        arr = _read_f32_array(data, _ACROSS_TRACK_OFFSET, _NUM_BEAMS)
-        if np.all(np.isfinite(arr)) and np.all(np.abs(arr) < 500):
-            ping.across_track = arr
+    # Across-track: try multiple known offsets
+    _ACROSS_OFFSETS = [_ACROSS_TRACK_OFFSET, 61440]
+    for a_off in _ACROSS_OFFSETS:
+        if len(ping.across_track) > 0 and np.any(ping.across_track != 0):
+            break
+        if data_len >= a_off + _NUM_BEAMS * 4:
+            arr = _read_f32_array(data, a_off, _NUM_BEAMS)
+            finite = arr[np.isfinite(arr)]
+            nz = finite[finite != 0]
+            if len(nz) > _NUM_BEAMS * 0.3 and np.all(np.abs(finite) < 500):
+                ping.across_track = arr
+                break
 
-    if data_len >= _DEPTH_OFFSET + _NUM_BEAMS * 4:
-        arr = _read_f32_array(data, _DEPTH_OFFSET, _NUM_BEAMS)
-        if np.all(np.isfinite(arr)) and np.all(arr < 0) and np.all(arr > -500):
-            ping.depth = arr
+    # Depth: try multiple known offsets (varies by ping size)
+    _DEPTH_OFFSETS = [_DEPTH_OFFSET, 122880, 126976]
+    for d_off in _DEPTH_OFFSETS:
+        if len(ping.depth) > 0 and np.any(ping.depth != 0):
+            break
+        if data_len >= d_off + _NUM_BEAMS * 4:
+            arr = _read_f32_array(data, d_off, _NUM_BEAMS)
+            finite = arr[np.isfinite(arr)]
+            nz = finite[finite != 0]
+            if len(nz) > _NUM_BEAMS * 0.3 and np.all(nz < 0) and np.all(nz > -500):
+                ping.depth = arr
+                break
 
     if data_len >= _TIMESTAMP_OFFSET + 8:
         ts = _read_f64(data, _TIMESTAMP_OFFSET)
