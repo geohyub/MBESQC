@@ -371,7 +371,9 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
             ping._depth_source = 'computed_from_tt'
 
     # Fallback: compute across-track from depth + TT (no beam angle needed)
-    if (len(ping.across_track) == 0 or not np.any(ping.across_track != 0)):
+    has_good_across = (len(ping.across_track) > 0 and
+                       np.sum(np.abs(ping.across_track) > 1.0) > _NUM_BEAMS * 0.15)
+    if not has_good_across:
         if len(ping.depth) > 0 and len(ping.travel_time) > 0:
             tt = ping.travel_time
             d = np.abs(ping.depth)
@@ -384,8 +386,10 @@ def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
                 across[valid] = np.sqrt(sq_diff)
                 # Port side (first half) = negative, stbd = positive
                 across[:_NUM_BEAMS // 2] *= -1
-                ping.across_track = across
-                ping._across_source = 'computed_from_tt_depth'
+                # Sanity check: across should be < 500m for realistic swath
+                if np.all(np.abs(across[across != 0]) < 500):
+                    ping.across_track = across
+                    ping._across_source = 'computed_from_tt_depth'
 
     # Set actual valid beam count
     if len(ping.depth) > 0:
@@ -407,8 +411,11 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
 
     if data_len >= _RX_ANGLE_OFFSET + _NUM_BEAMS * 4:
         arr = _read_f32_array(data, _RX_ANGLE_OFFSET, _NUM_BEAMS)
-        if np.all(np.isfinite(arr)) and np.all(arr > 0) and np.all(arr < 2):
-            ping.rx_angle = arr
+        if np.all(np.isfinite(arr)) and np.all(arr >= 0) and np.all(arr < 2.5):
+            # Verify it's actually angles: should have range > 0.5 rad
+            nz = arr[arr > 0.01]
+            if len(nz) > 100 and nz.max() - nz.min() > 0.3:
+                ping.rx_angle = arr
 
     # Backscatter at +65628 (confirmed for EDF/JAKO/Sinan)
     _BACKSCATTER_OFFSET = 65628
@@ -425,18 +432,25 @@ def _try_fixed_offsets(data: bytes, ping: PdsPing) -> None:
         if data_len >= a_off + _NUM_BEAMS * 4:
             arr = _read_f32_array(data, a_off, _NUM_BEAMS)
             finite = arr[np.isfinite(arr)]
-            # Real across-track has significant values (>1m) on both port and stbd
-            sig = finite[np.abs(finite) > 1.0]
+            # Real across-track: has both negative and positive values
+            if not np.all(np.abs(finite) < 500):
+                continue
             has_neg = np.any(finite < -1.0)
             has_pos = np.any(finite > 1.0)
-            if len(sig) > _NUM_BEAMS * 0.2 and has_neg and has_pos and np.all(np.abs(finite) < 500):
+            nz_sig = finite[np.abs(finite) > 0.5]
+            if len(nz_sig) > _NUM_BEAMS * 0.15 and has_neg and has_pos:
                 ping.across_track = arr
                 break
 
     # Depth: try multiple known offsets (varies by ping size and snippet count)
     # EDF/Bada 139K pings: 122880 (block 30)
     # Sinan 174K pings: 167936 (block 41) — 11 extra snippet blocks
-    _DEPTH_OFFSETS = [_DEPTH_OFFSET, 122880, 126976, 167936, 172032]
+    # Depth offsets vary by ping type:
+    # Big pings (139K): 122880 (block 30)
+    # Extra-snippet (174K): 167936 (block 41)
+    # Medium pings (72K): 53248 (block 13)
+    # Small pings (67K): via dynamic detection
+    _DEPTH_OFFSETS = [_DEPTH_OFFSET, 122880, 126976, 167936, 172032, 53248, 57344]
     for d_off in _DEPTH_OFFSETS:
         if len(ping.depth) > 0 and np.any(ping.depth != 0):
             break
