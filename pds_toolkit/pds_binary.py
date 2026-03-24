@@ -636,7 +636,7 @@ _FF08_MARKER = bytes([0xFF, 0x08, 0x00])
 
 
 def _scan_ff08_records(filepath: str, search_start: int = 0,
-                       search_size: int = 20 * 1024 * 1024) -> dict[str, list[tuple[int, int, int]]]:
+                       search_size: int = 0) -> dict[str, list[tuple[int, int, int]]]:
     """Scan for all 0xFF08 records and return offsets grouped by record SIZE.
 
     Type numbers vary per vessel config, but record sizes are invariant:
@@ -657,6 +657,9 @@ def _scan_ff08_records(filepath: str, search_start: int = 0,
     result: dict[str, list[tuple[int, int, int]]] = {}
 
     with open(filepath, 'rb') as f:
+        if search_size <= 0:
+            f.seek(0, 2)
+            search_size = f.tell() - search_start
         f.seek(search_start)
         data = f.read(search_size)
 
@@ -979,7 +982,7 @@ def read_pds_binary(
     # 3. Scan 0xFF08 records for nav, attitude, tide
     try:
         ff08_records = _scan_ff08_records(filepath, search_start=0,
-                                          search_size=min(result.file_size, 20 * 1024 * 1024))
+                                          search_size=0)  # 0 = scan entire file
     except (IOError, OSError) as e:
         warnings.warn(f"Failed to scan 0xFF08 records in {filepath}: {e}")
         ff08_records = {}
@@ -1178,6 +1181,21 @@ def pds_binary_info(filepath: str | Path) -> dict:
         "lat_range": result.lat_range,
         "lon_range": result.lon_range,
     }
+
+
+def pds_nav_only(filepath: str | Path) -> list[PdsNavRecord]:
+    """Fast nav-only extraction: scans entire file for 0xFF08 nav records.
+
+    Much faster than read_pds_binary() because it skips ping parsing entirely.
+    Returns list of PdsNavRecord with latitude, longitude, timestamp.
+    """
+    filepath = str(filepath)
+    ff08 = _scan_ff08_records(filepath, search_size=0)
+    nav_tuples = ff08.get('nav', [])
+    if not nav_tuples:
+        return []
+    nav_pairs = [(t[0], t[1]) for t in nav_tuples]
+    return _parse_ff08_nav(filepath, nav_pairs)
 
 
 def pds_binary_to_xyz(pds_data: PdsBinaryData) -> np.ndarray:

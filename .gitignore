@@ -36,3 +36,9 @@ reference/**/*.dxf_rxl
 reference/**/*.nsf
 reference/**/*.log
 *.zip
+.playwright-mcp/
+*.png
+!docs/*.png
+!static/*.png
+qc_output*/
+reference/EDF_trackplot*.png
