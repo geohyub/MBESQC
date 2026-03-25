@@ -65,6 +65,12 @@ _TT_SIGNATURE_TOLERANCE = 0.05
 # At 1024 beams the smallest observed record is ~8KB; use conservative minimum.
 _MIN_PING_SPACING = 6000
 
+# Orsted-type ping layout: 17 fields × 1024 beams × 4 bytes = 69632 bytes
+_ORSTED_PING_SIZE = 69632
+_ORSTED_DEPTH_FIELD = 8   # depth is field 8 (offset 32768)
+_ORSTED_ACROSS_FIELD = 6  # across_track is field 6 (offset 24576)
+_ORSTED_QUALITY_FIELD = 16  # quality is field 16 (offset 65536)
+
 # Navigation record structure
 _NAV_RECORD_SIZE = 648
 _NAV_LAT_OFFSET = 24
@@ -309,6 +315,113 @@ def _find_tt_arrays(filepath: str, max_pings: int | None = None) -> list[int]:
                 i += 1
 
     return offsets
+
+
+def _find_depth_blocks(filepath: str, max_pings: int | None = None) -> list[int]:
+    """Find ping depth array offsets by scanning for 1024-element negative depth blocks.
+
+    Used as fallback when TT V-shape detection fails (e.g. Orsted/T50 data).
+    Returns file offsets of depth array starts, from which ping boundaries
+    can be inferred using the Orsted layout (depth = field 8 of 17).
+    """
+    offsets: list[int] = []
+    search_start = _find_text_header_end(filepath)
+    block_size = _NUM_BEAMS * 4  # 4096 bytes
+    # Minimum gap between depth blocks to avoid detecting the same block shifted
+    min_gap = _ORSTED_PING_SIZE - block_size  # ~65536
+
+    with open(filepath, 'rb') as f:
+        f.seek(0, 2)
+        file_size = f.tell()
+
+        chunk_size = 20 * 1024 * 1024
+        overlap = block_size  # overlap to catch blocks at chunk boundaries
+        for chunk_start in range(search_start, file_size, chunk_size - overlap):
+            f.seek(chunk_start)
+            read_size = min(chunk_size, file_size - chunk_start)
+            data = f.read(read_size)
+            if len(data) < block_size:
+                break
+
+            # Scan at 4-byte steps but verify full 4096-byte block
+            pos = 0
+            while pos <= len(data) - block_size:
+                arr = np.frombuffer(data[pos:pos + block_size], dtype='<f4')
+
+                # Quick reject: center beam should be negative depth
+                center = float(arr[_NUM_BEAMS // 2])
+                if not (-500 < center < -0.5):
+                    pos += 4
+                    continue
+
+                # Depth signature: mostly negative, finite, in [-500, 0], low std
+                finite_mask = np.isfinite(arr)
+                if np.sum(finite_mask) < 900:
+                    pos += 4
+                    continue
+                finite_vals = arr[finite_mask]
+                nonzero = finite_vals[finite_vals != 0]
+                if len(nonzero) < 600:
+                    pos += 4
+                    continue
+                if not (np.all(nonzero < 0) and np.all(nonzero > -500)):
+                    pos += 4
+                    continue
+                if np.std(nonzero) > 5:
+                    pos += 4
+                    continue
+
+                abs_off = chunk_start + pos
+                if not offsets or abs_off - offsets[-1] >= min_gap:
+                    offsets.append(abs_off)
+                    if max_pings and len(offsets) >= max_pings:
+                        return offsets
+                    pos += min_gap  # skip past this ping
+                else:
+                    pos += 4
+                continue
+
+    return offsets
+
+
+def _parse_orsted_ping(f, ping_start: int, depth_off: int,
+                       ping_number: int, file_size: int) -> PdsPing:
+    """Parse a ping using Orsted/T50 layout (17 fields × 1024 beams × 4B).
+
+    Field layout (each field = 1024 × float32 = 4096 bytes):
+      Field  6: across_track
+      Field  8: depth (negative)
+      Field 16: quality (0~1)
+    """
+    ping = PdsPing(ping_number=ping_number, file_offset=depth_off)
+    block = _NUM_BEAMS * 4  # 4096
+
+    # Depth (field 8) — already located
+    if depth_off + block <= file_size:
+        f.seek(depth_off)
+        ping.depth = np.frombuffer(f.read(block), dtype='<f4').copy()
+
+    # Across-track (field 6) — 2 blocks before depth
+    across_off = depth_off - (_ORSTED_DEPTH_FIELD - _ORSTED_ACROSS_FIELD) * block
+    if 0 <= across_off and across_off + block <= file_size:
+        f.seek(across_off)
+        arr = np.frombuffer(f.read(block), dtype='<f4').copy()
+        if np.all(np.isfinite(arr)) and np.any(arr < 0) and np.any(arr > 0):
+            ping.across_track = arr
+
+    # Quality (field 16) — 8 blocks after depth
+    qual_off = depth_off + (_ORSTED_QUALITY_FIELD - _ORSTED_DEPTH_FIELD) * block
+    if 0 <= qual_off and qual_off + block <= file_size:
+        f.seek(qual_off)
+        arr = np.frombuffer(f.read(block), dtype='<f4').copy()
+        if np.all(np.isfinite(arr)) and np.all(arr >= 0) and np.all(arr <= 1.0):
+            ping.quality = arr
+
+    # Beam count
+    if len(ping.depth) > 0:
+        ping.num_beams = int(np.sum(ping.depth != 0))
+
+    return ping
 
 
 def _parse_ping(data: bytes, file_offset: int, ping_number: int) -> PdsPing:
@@ -901,6 +1014,60 @@ def read_pds_binary(
         tt_offsets = _find_tt_arrays(filepath, max_pings=max_pings)
     except (IOError, OSError) as e:
         warnings.warn(f"Failed to scan pings in {filepath}: {e}")
+        tt_offsets = []
+
+    # 1b. Validate TT offsets: check gap consistency AND depth readability
+    if len(tt_offsets) >= 3:
+        gaps = [tt_offsets[i + 1] - tt_offsets[i] for i in range(len(tt_offsets) - 1)]
+        median_gap = sorted(gaps)[len(gaps) // 2]
+        consistent_gaps = sum(1 for g in gaps if abs(g - median_gap) < median_gap * 0.1)
+        if consistent_gaps < len(gaps) * 0.6:
+            tt_offsets = []
+
+    # 1b2. Even if TT gaps are consistent, verify depth is readable at EDF offsets
+    if len(tt_offsets) >= 1 and load_arrays:
+        with open(filepath, 'rb') as f:
+            test_off = tt_offsets[0]
+            # Try reading depth at EDF fixed offset
+            depth_test_off = test_off + _DEPTH_OFFSET
+            if depth_test_off + _NUM_BEAMS * 4 <= result.file_size:
+                f.seek(depth_test_off)
+                test_arr = np.frombuffer(f.read(_NUM_BEAMS * 4), dtype='<f4')
+                nz = test_arr[test_arr != 0]
+                depth_ok = (len(nz) > 600 and np.all(np.isfinite(nz))
+                            and np.all(nz < 0) and np.all(nz > -500)
+                            and np.std(nz) < 10)
+            else:
+                depth_ok = False
+
+            if not depth_ok:
+                # EDF layout fails — try dynamic detection on first ping
+                ping_ok = False
+                if tt_offsets[0] + median_gap <= result.file_size:
+                    f.seek(tt_offsets[0])
+                    test_data = f.read(int(median_gap))
+                    test_ping = _parse_ping(test_data, tt_offsets[0], 0)
+                    if len(test_ping.depth) > 0 and np.any(test_ping.depth != 0):
+                        nz = test_ping.depth[test_ping.depth != 0]
+                        if np.std(nz) < 10 and np.ptp(nz) < 20:
+                            ping_ok = True
+
+                if not ping_ok:
+                    # TT offsets produce bad depth → fall through to Orsted layout
+                    tt_offsets = []
+
+    # 1c. Fallback: depth-block based ping detection (Orsted/T50 layout)
+    use_orsted_layout = False
+    depth_block_offsets: list[int] = []
+    if len(tt_offsets) == 0:
+        try:
+            depth_block_offsets = _find_depth_blocks(filepath, max_pings=max_pings)
+            if depth_block_offsets:
+                use_orsted_layout = True
+        except (IOError, OSError) as e:
+            warnings.warn(f"Failed depth-block scan in {filepath}: {e}")
+
+    if not tt_offsets and not depth_block_offsets:
         return result
 
     # 2. Parse each ping with carry-forward for snippet-only pings
@@ -911,55 +1078,66 @@ def read_pds_binary(
 
     try:
         with open(filepath, 'rb') as f:
-            for idx, tt_off in enumerate(tt_offsets):
-                if load_arrays:
-                    # Read actual ping size (up to next ping or min_record_bytes)
-                    if idx + 1 < len(tt_offsets):
-                        actual_size = tt_offsets[idx + 1] - tt_off
+            if use_orsted_layout:
+                # Orsted layout: depth block is field 8 of 17
+                # Ping start = depth_offset - 8 * 4096
+                for idx, depth_off in enumerate(depth_block_offsets):
+                    if load_arrays:
+                        ping_start = depth_off - _ORSTED_DEPTH_FIELD * _NUM_BEAMS * 4
+                        ping = _parse_orsted_ping(f, ping_start, depth_off, idx, result.file_size)
                     else:
-                        actual_size = min_record_bytes
-                    read_size = max(actual_size, min_record_bytes)
-                    f.seek(tt_off)
-                    data = f.read(read_size)
-                    ping = _parse_ping(data, tt_off, idx)
+                        ping = PdsPing(ping_number=idx, file_offset=depth_off)
+                    result.pings.append(ping)
+            else:
+                for idx, tt_off in enumerate(tt_offsets):
+                    if load_arrays:
+                        # Read actual ping size (up to next ping or min_record_bytes)
+                        if idx + 1 < len(tt_offsets):
+                            actual_size = tt_offsets[idx + 1] - tt_off
+                        else:
+                            actual_size = min_record_bytes
+                        read_size = max(actual_size, min_record_bytes)
+                        f.seek(tt_off)
+                        data = f.read(read_size)
+                        ping = _parse_ping(data, tt_off, idx)
 
-                    # Carry-forward: snippet-only pings inherit from previous
-                    _has = lambda arr: len(arr) > 0 and np.any(arr != 0)
+                        # Carry-forward: snippet-only pings inherit from previous
+                        _has = lambda arr: len(arr) > 0 and np.any(arr != 0)
 
-                    if _has(ping.across_track) and np.sum(np.abs(ping.across_track) > 1.0) > 100:
-                        _prev_across = ping.across_track.copy()
-                    elif len(_prev_across) > 0:
-                        ping.across_track = _prev_across.copy()
-                        ping._across_source = 'carried_forward'
+                        if _has(ping.across_track) and np.sum(np.abs(ping.across_track) > 1.0) > 100:
+                            _prev_across = ping.across_track.copy()
+                        elif len(_prev_across) > 0:
+                            ping.across_track = _prev_across.copy()
+                            ping._across_source = 'carried_forward'
 
-                    if _has(ping.quality):
-                        _prev_quality = ping.quality.copy()
-                    elif len(_prev_quality) > 0:
-                        ping.quality = _prev_quality.copy()
+                        if _has(ping.quality):
+                            _prev_quality = ping.quality.copy()
+                        elif len(_prev_quality) > 0:
+                            ping.quality = _prev_quality.copy()
 
-                    if _has(ping.rx_angle):
-                        _prev_rx_angle = ping.rx_angle.copy()
-                    elif len(_prev_rx_angle) > 0:
-                        ping.rx_angle = _prev_rx_angle.copy()
+                        if _has(ping.rx_angle):
+                            _prev_rx_angle = ping.rx_angle.copy()
+                        elif len(_prev_rx_angle) > 0:
+                            ping.rx_angle = _prev_rx_angle.copy()
 
-                    if _has(ping.backscatter):
-                        _prev_backscatter = ping.backscatter.copy()
-                    elif len(_prev_backscatter) > 0:
-                        ping.backscatter = _prev_backscatter.copy()
-                else:
-                    ts_off = tt_off + _TIMESTAMP_OFFSET
-                    if ts_off + 8 <= result.file_size:
-                        f.seek(ts_off)
-                        ts = struct.unpack('<d', f.read(8))[0]
-                        ping = PdsPing(
-                            ping_number=idx,
-                            file_offset=tt_off,
-                            timestamp=ts if _is_valid_timestamp(ts) else 0.0,
-                            datetime_utc=_ms_to_datetime(ts) if _is_valid_timestamp(ts) else None,
-                        )
+                        if _has(ping.backscatter):
+                            _prev_backscatter = ping.backscatter.copy()
+                        elif len(_prev_backscatter) > 0:
+                            ping.backscatter = _prev_backscatter.copy()
                     else:
-                        ping = PdsPing(ping_number=idx, file_offset=tt_off)
-                result.pings.append(ping)
+                        ts_off = tt_off + _TIMESTAMP_OFFSET
+                        if ts_off + 8 <= result.file_size:
+                            f.seek(ts_off)
+                            ts = struct.unpack('<d', f.read(8))[0]
+                            ping = PdsPing(
+                                ping_number=idx,
+                                file_offset=tt_off,
+                                timestamp=ts if _is_valid_timestamp(ts) else 0.0,
+                                datetime_utc=_ms_to_datetime(ts) if _is_valid_timestamp(ts) else None,
+                            )
+                        else:
+                            ping = PdsPing(ping_number=idx, file_offset=tt_off)
+                    result.pings.append(ping)
     except (IOError, OSError, struct.error) as e:
         warnings.warn(f"Error reading pings from {filepath}: {e}")
 
