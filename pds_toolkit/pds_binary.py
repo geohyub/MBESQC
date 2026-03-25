@@ -1090,9 +1090,9 @@ def read_pds_binary(
         gaps = [tt_offsets[i + 1] - tt_offsets[i] for i in range(len(tt_offsets) - 1)]
         median_gap = sorted(gaps)[len(gaps) // 2]
 
-        # If median TT gap < 80000, it's Orsted/T50 layout (69888B pings)
-        # EDF pings are >100000B. Use depth-block method for small pings.
-        if median_gap < 80000:
+        # If median TT gap < 71000, it's Orsted/T50 layout (69888B pings)
+        # EDF pings are >=72000B. Use depth-block method for small pings.
+        if median_gap < 71000:
             # TT found valid V-shapes but ping size is Orsted, not EDF
             # Depth offset differs → use Orsted depth-block detection
             tt_offsets = []
