@@ -383,32 +383,39 @@ def _find_depth_blocks(filepath: str, max_pings: int | None = None) -> list[int]
                     continue
                 if not (np.all(nonzero < 0) and np.all(nonzero > -500)):
                     continue
-                if np.std(nonzero) > 5:
+                nz_std = float(np.std(nonzero))
+                if nz_std > 5:
                     continue
 
                 abs_off = chunk_start + byte_pos
-                if not chunk_candidates or abs_off - chunk_candidates[-1] >= min_gap:
-                    chunk_candidates.append(abs_off)
+                # Score: prefer realistic nadir depth (5-200m) and low std
+                nadir_val = abs(float(np.max(nonzero)))
+                score = nadir_val * (1.0 / (1.0 + nz_std))  # higher = better
+
+                if not chunk_candidates or abs_off - chunk_candidates[-1][0] >= min_gap:
+                    chunk_candidates.append((abs_off, score))
 
             all_candidates.extend(chunk_candidates)
 
-    # Select best chain from candidates: find the stride that produces
-    # the longest consistent sequence
     if not all_candidates:
         return offsets
 
+    # Extract offsets and scores
+    cand_offsets = [c[0] for c in all_candidates]
+    cand_scores = {c[0]: c[1] for c in all_candidates}
+
+    # Strategy 1: find best chain at known ping strides
     best_chain: list[int] = []
-    # Try known ping strides
+    best_chain_score = 0.0
     for stride in [_ORSTED_PING_SIZE, _ORSTED_PING_SIZE + 256,
                    _ORSTED_PING_SIZE - 256, _ORSTED_PING_SIZE + 512]:
-        cand_set = set(all_candidates)
-        for start in all_candidates[:50]:  # try first 50 as chain starts
+        for start in cand_offsets[:100]:
             chain = [start]
             nxt = start + stride
-            tolerance = 16  # allow ±16 bytes alignment jitter
+            tolerance = 16
             while True:
                 found = False
-                for c in all_candidates:
+                for c in cand_offsets:
                     if abs(c - nxt) <= tolerance:
                         chain.append(c)
                         nxt = c + stride
@@ -416,18 +423,24 @@ def _find_depth_blocks(filepath: str, max_pings: int | None = None) -> list[int]
                         break
                 if not found:
                     break
-            if len(chain) > len(best_chain):
+            chain_score = sum(cand_scores.get(c, 0) for c in chain)
+            # Prefer longer chains, break ties by score
+            if (len(chain) > len(best_chain) or
+                    (len(chain) == len(best_chain) and chain_score > best_chain_score)):
                 best_chain = chain
+                best_chain_score = chain_score
 
     if best_chain:
         offsets = best_chain[:max_pings] if max_pings else best_chain
     else:
-        # No chain found — use first candidates with min_gap spacing
-        for c in all_candidates:
-            if not offsets or c - offsets[-1] >= min_gap:
-                offsets.append(c)
+        # Strategy 2: pick highest-scoring candidates with min_gap spacing
+        sorted_cands = sorted(all_candidates, key=lambda c: c[1], reverse=True)
+        for off, score in sorted_cands:
+            if not offsets or off - offsets[-1] >= min_gap:
+                offsets.append(off)
                 if max_pings and len(offsets) >= max_pings:
                     break
+        offsets.sort()
 
     return offsets
 
