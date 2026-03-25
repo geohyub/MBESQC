@@ -327,8 +327,8 @@ def _find_depth_blocks(filepath: str, max_pings: int | None = None) -> list[int]
     offsets: list[int] = []
     search_start = _find_text_header_end(filepath)
     block_size = _NUM_BEAMS * 4  # 4096 bytes
-    # Minimum gap between depth blocks to avoid detecting the same block shifted
     min_gap = _ORSTED_PING_SIZE - block_size  # ~65536
+    all_candidates: list[int] = []
 
     with open(filepath, 'rb') as f:
         f.seek(0, 2)
@@ -343,43 +343,91 @@ def _find_depth_blocks(filepath: str, max_pings: int | None = None) -> list[int]
             if len(data) < block_size:
                 break
 
-            # Scan at 4-byte steps but verify full 4096-byte block
-            pos = 0
-            while pos <= len(data) - block_size:
-                arr = np.frombuffer(data[pos:pos + block_size], dtype='<f4')
+            # Vectorized scan: find candidate depth blocks using numpy
+            all_floats = np.frombuffer(data[:len(data) // 4 * 4], dtype='<f4')
+            n_floats = len(all_floats)
+            if n_floats < _NUM_BEAMS:
+                continue
 
-                # Quick reject: center beam should be negative depth
-                center = float(arr[_NUM_BEAMS // 2])
-                if not (-500 < center < -0.5):
-                    pos += 4
+            # Phase 1: find ALL positions where a 1024-float window could be depth
+            # Use vectorized sliding window: check if float[i+256] is negative depth
+            max_start = n_floats - _NUM_BEAMS
+            depth_mask = np.isfinite(all_floats) & (all_floats < -0.5) & (all_floats > -500)
+
+            # Check beam 768 as indicator — valid in both layouts:
+            #   1024-beam: valid beams 0-991, beam 768 is valid
+            #   512-beam:  valid beams 512-1023, beam 768 is valid
+            beam768_hits = np.where(depth_mask[768:max_start + 768])[0]
+
+            # Efficiently sample beam768 hits at min_gap intervals
+            chunk_candidates = []
+            last_checked = -min_gap * 2
+            for ci in beam768_hits:
+                fi = ci
+                byte_pos = fi * 4
+
+                # Skip if too close to last checked position
+                if byte_pos - last_checked < min_gap // 2:
+                    continue
+                last_checked = byte_pos
+
+                if byte_pos + block_size > len(data):
                     continue
 
-                # Depth signature: mostly negative, finite, in [-500, 0], low std
+                arr = all_floats[fi:fi + _NUM_BEAMS]
                 finite_mask = np.isfinite(arr)
-                if np.sum(finite_mask) < 900:
-                    pos += 4
+                if np.sum(finite_mask) < 400:
                     continue
-                finite_vals = arr[finite_mask]
-                nonzero = finite_vals[finite_vals != 0]
-                if len(nonzero) < 600:
-                    pos += 4
+                nonzero = arr[finite_mask & (arr != 0)]
+                if len(nonzero) < 400:
                     continue
                 if not (np.all(nonzero < 0) and np.all(nonzero > -500)):
-                    pos += 4
                     continue
                 if np.std(nonzero) > 5:
-                    pos += 4
                     continue
 
-                abs_off = chunk_start + pos
-                if not offsets or abs_off - offsets[-1] >= min_gap:
-                    offsets.append(abs_off)
-                    if max_pings and len(offsets) >= max_pings:
-                        return offsets
-                    pos += min_gap  # skip past this ping
-                else:
-                    pos += 4
-                continue
+                abs_off = chunk_start + byte_pos
+                if not chunk_candidates or abs_off - chunk_candidates[-1] >= min_gap:
+                    chunk_candidates.append(abs_off)
+
+            all_candidates.extend(chunk_candidates)
+
+    # Select best chain from candidates: find the stride that produces
+    # the longest consistent sequence
+    if not all_candidates:
+        return offsets
+
+    best_chain: list[int] = []
+    # Try known ping strides
+    for stride in [_ORSTED_PING_SIZE, _ORSTED_PING_SIZE + 256,
+                   _ORSTED_PING_SIZE - 256, _ORSTED_PING_SIZE + 512]:
+        cand_set = set(all_candidates)
+        for start in all_candidates[:50]:  # try first 50 as chain starts
+            chain = [start]
+            nxt = start + stride
+            tolerance = 16  # allow ±16 bytes alignment jitter
+            while True:
+                found = False
+                for c in all_candidates:
+                    if abs(c - nxt) <= tolerance:
+                        chain.append(c)
+                        nxt = c + stride
+                        found = True
+                        break
+                if not found:
+                    break
+            if len(chain) > len(best_chain):
+                best_chain = chain
+
+    if best_chain:
+        offsets = best_chain[:max_pings] if max_pings else best_chain
+    else:
+        # No chain found — use first candidates with min_gap spacing
+        for c in all_candidates:
+            if not offsets or c - offsets[-1] >= min_gap:
+                offsets.append(c)
+                if max_pings and len(offsets) >= max_pings:
+                    break
 
     return offsets
 
@@ -1024,37 +1072,44 @@ def read_pds_binary(
         if consistent_gaps < len(gaps) * 0.6:
             tt_offsets = []
 
-    # 1b2. Even if TT gaps are consistent, verify depth is readable at EDF offsets
-    if len(tt_offsets) >= 1 and load_arrays:
-        with open(filepath, 'rb') as f:
-            test_off = tt_offsets[0]
-            # Try reading depth at EDF fixed offset
-            depth_test_off = test_off + _DEPTH_OFFSET
-            if depth_test_off + _NUM_BEAMS * 4 <= result.file_size:
-                f.seek(depth_test_off)
-                test_arr = np.frombuffer(f.read(_NUM_BEAMS * 4), dtype='<f4')
-                nz = test_arr[test_arr != 0]
-                depth_ok = (len(nz) > 600 and np.all(np.isfinite(nz))
-                            and np.all(nz < 0) and np.all(nz > -500)
-                            and np.std(nz) < 10)
-            else:
-                depth_ok = False
+    # 1b2. Determine ping layout from TT gap size
+    if len(tt_offsets) >= 3 and load_arrays:
+        gaps = [tt_offsets[i + 1] - tt_offsets[i] for i in range(len(tt_offsets) - 1)]
+        median_gap = sorted(gaps)[len(gaps) // 2]
 
-            if not depth_ok:
-                # EDF layout fails — try dynamic detection on first ping
-                ping_ok = False
-                if tt_offsets[0] + median_gap <= result.file_size:
-                    f.seek(tt_offsets[0])
-                    test_data = f.read(int(median_gap))
-                    test_ping = _parse_ping(test_data, tt_offsets[0], 0)
-                    if len(test_ping.depth) > 0 and np.any(test_ping.depth != 0):
-                        nz = test_ping.depth[test_ping.depth != 0]
-                        if np.std(nz) < 10 and np.ptp(nz) < 20:
-                            ping_ok = True
+        # If median TT gap < 80000, it's Orsted/T50 layout (69888B pings)
+        # EDF pings are >100000B. Use depth-block method for small pings.
+        if median_gap < 80000:
+            # TT found valid V-shapes but ping size is Orsted, not EDF
+            # Depth offset differs → use Orsted depth-block detection
+            tt_offsets = []
+        else:
+            # EDF-size pings: verify depth at EDF fixed offset
+            with open(filepath, 'rb') as f:
+                test_off = tt_offsets[0]
+                depth_test_off = test_off + _DEPTH_OFFSET
+                if depth_test_off + _NUM_BEAMS * 4 <= result.file_size:
+                    f.seek(depth_test_off)
+                    test_arr = np.frombuffer(f.read(_NUM_BEAMS * 4), dtype='<f4')
+                    nz = test_arr[test_arr != 0]
+                    depth_ok = (len(nz) > 600 and np.all(np.isfinite(nz))
+                                and np.all(nz < 0) and np.all(nz > -500)
+                                and np.std(nz) < 10)
+                else:
+                    depth_ok = False
 
-                if not ping_ok:
-                    # TT offsets produce bad depth → fall through to Orsted layout
-                    tt_offsets = []
+                if not depth_ok:
+                    ping_ok = False
+                    if tt_offsets[0] + median_gap <= result.file_size:
+                        f.seek(tt_offsets[0])
+                        test_data = f.read(int(median_gap))
+                        test_ping = _parse_ping(test_data, tt_offsets[0], 0)
+                        if len(test_ping.depth) > 0 and np.any(test_ping.depth != 0):
+                            nz2 = test_ping.depth[test_ping.depth != 0]
+                            if np.std(nz2) < 10 and np.ptp(nz2) < 20:
+                                ping_ok = True
+                    if not ping_ok:
+                        tt_offsets = []
 
     # 1c. Fallback: depth-block based ping detection (Orsted/T50 layout)
     use_orsted_layout = False
