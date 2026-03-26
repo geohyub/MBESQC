@@ -1,13 +1,7 @@
 @echo off
 chcp 65001 >nul
-title MBES QC - Desktop
-echo ============================================
-echo   MBES QC - Desktop Application (CTk)
-echo ============================================
-echo.
-
-set PYTHONPATH=E:\Software\_shared;E:\Software\MBESQC
-cd /d E:\Software\MBESQC
-
-python gui\app.py
+title MBESQC Desktop
+cd /d E:\Software\QC\MBESQC
+set PYTHONPATH=E:\Software\_shared;E:\Software\QC\MBESQC
+python -m desktop
 pause
