@@ -122,6 +122,7 @@ def validate_offsets(
     max_pings: int = 20,
     lat_range: tuple[float, float] = (-90.0, 90.0),
     lon_range: tuple[float, float] = (-180.0, 180.0),
+    om_offsets_dict: dict[str, dict] | None = None,
 ) -> OffsetValidationResult:
     """Validate PDS sensor offsets against OffsetManager reference.
 
@@ -183,7 +184,9 @@ def validate_offsets(
 
     # 3. Load OffsetManager reference
     om_offsets = {}
-    if offsetmanager_db:
+    if om_offsets_dict:
+        om_offsets = om_offsets_dict
+    elif offsetmanager_db:
         om_offsets = _load_om_offsets(
             str(offsetmanager_db),
             config_id=config_id,

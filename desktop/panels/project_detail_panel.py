@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Dark, Font, Space, Radius, TABLE_STYLE, BTN_PRIMARY, STATUS_ICONS
 from geoview_pyside6.widgets import KPICard
 
 from desktop.services.data_service import DataService
@@ -117,20 +117,7 @@ class ProjectDetailPanel(QWidget):
 
         batch_btn = QPushButton("Batch QC")
         batch_btn.setCursor(Qt.PointingHandCursor)
-        batch_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {Dark.CYAN};
-                color: {Dark.BG};
-                border: none;
-                border-radius: {Radius.SM}px;
-                padding: 5px 14px;
-                font-size: {Font.SM}px;
-                font-weight: {Font.SEMIBOLD};
-            }}
-            QPushButton:hover {{
-                background: #0891b2;
-            }}
-        """)
+        batch_btn.setStyleSheet(BTN_PRIMARY.replace(Dark.GREEN, Dark.CYAN).replace(Dark.GREEN_H, Dark.CYAN_H))
         batch_btn.clicked.connect(self._on_batch_qc)
         file_header.addWidget(batch_btn)
 
@@ -153,32 +140,7 @@ class ProjectDetailPanel(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.setShowGrid(False)
 
-        self._table.setStyleSheet(f"""
-            QTableWidget {{
-                background: {Dark.DARK};
-                alternate-background-color: {Dark.BG_ALT};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
-                border-radius: {Radius.SM}px;
-                font-size: {Font.SM}px;
-            }}
-            QTableWidget::item {{
-                padding: 4px 8px;
-                border: none;
-            }}
-            QTableWidget::item:selected {{
-                background: {Dark.SLATE};
-            }}
-            QHeaderView::section {{
-                background: {Dark.NAVY};
-                color: {Dark.MUTED};
-                font-size: {Font.XS}px;
-                font-weight: {Font.MEDIUM};
-                border: none;
-                border-bottom: 1px solid {Dark.BORDER};
-                padding: 4px 8px;
-            }}
-        """)
+        self._table.setStyleSheet(TABLE_STYLE)
 
         self._table.doubleClicked.connect(self._on_double_click)
         layout.addWidget(self._table)
@@ -244,12 +206,12 @@ class ProjectDetailPanel(QWidget):
             if r and r["status"] == "done":
                 score = r.get("score", 0)
                 self._table.setItem(i, 4, QTableWidgetItem(f"{score:.1f}"))
-                status_item = QTableWidgetItem("DONE")
+                status_item = QTableWidgetItem(f"{STATUS_ICONS.get('DONE', '')} DONE")
                 status_item.setForeground(Qt.green)
                 self._table.setItem(i, 5, status_item)
             elif r and r["status"] == "running":
                 self._table.setItem(i, 4, QTableWidgetItem("---"))
-                status_item = QTableWidgetItem("RUNNING")
+                status_item = QTableWidgetItem(f"{STATUS_ICONS.get('RUNNING', '')} RUNNING")
                 status_item.setForeground(Qt.cyan)
                 self._table.setItem(i, 5, status_item)
             else:
@@ -269,7 +231,7 @@ class ProjectDetailPanel(QWidget):
                 cb.setChecked(checked)
 
     def _on_batch_qc(self):
-        """Run QC on selected files."""
+        """Run project-level QC via the analysis panel."""
         selected = []
         for i in range(self._table.rowCount()):
             cb = self._table.cellWidget(i, 0)
@@ -281,9 +243,11 @@ class ProjectDetailPanel(QWidget):
             self.toast_requested.emit("분석할 파일을 선택하세요", "warning")
             return
 
-        # Emit first selected for now; batch worker will be added later
-        for fid in selected:
-            self.file_selected.emit(fid, self._project_id)
+        # Navigate to analysis panel with first file (project-level QC)
+        self.file_selected.emit(selected[0], self._project_id)
+        if len(selected) > 1:
+            self.toast_requested.emit(
+                f"프로젝트 QC 실행 (GSF 디렉토리 전체 분석)", "info")
 
     def run_batch_qc(self):
         """External trigger for batch QC."""

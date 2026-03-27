@@ -1,2 +1,17 @@
+# MBESQC — Python Dependencies
+# Core
 numpy>=1.24
 pyproj>=3.5
+matplotlib>=3.7
+
+# Desktop (PySide6)
+PySide6>=6.5
+requests>=2.28
+
+# Web (Flask)
+flask>=2.3
+
+# Export
+openpyxl>=3.1
+python-docx>=0.8
+python-pptx>=0.6

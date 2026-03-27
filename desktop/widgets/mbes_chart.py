@@ -502,11 +502,14 @@ class MBESChartWidget(QFrame):
         self._canvas.draw()
         self.set_title("SVP QC")
 
-    def render_coverage(self, data: dict):
-        """Coverage map with premium tracklines."""
+    def render_coverage(self, data: dict, selected_line: str | None = None):
+        """Coverage map with premium tracklines. Highlight selected_line if given."""
         self._fig.clear()
         ax = self._fig.add_subplot(111)
-        _dark_ax(ax, "Coverage QC -- Survey Tracklines")
+        title = "Coverage QC -- Survey Tracklines"
+        if selected_line:
+            title += f" [{selected_line}]"
+        _dark_ax(ax, title)
 
         track_lines = data.get("track_lines", [])
         palette = [_CYAN, _EMERALD, _BLUE, _AMBER, _PURPLE, _ROSE, _TEAL, _INDIGO]
@@ -517,17 +520,18 @@ class MBESChartWidget(QFrame):
                 lons = np.asarray(line.get("lons", []))
                 name = line.get("name", f"Line {i+1}")
                 c = palette[i % len(palette)]
+                is_selected = (selected_line is None) or (name == selected_line)
+                alpha = 0.9 if is_selected else 0.15
+                lw = 2.5 if (selected_line and is_selected) else 1.8
                 if len(lats) > 0:
-                    # Main line
-                    ax.plot(lons, lats, color=c, linewidth=1.8, alpha=0.9,
-                            label=name[:25], zorder=3)
-                    # Glow effect
-                    ax.plot(lons, lats, color=c, linewidth=4, alpha=0.12, zorder=2)
-                    # Start/end markers
-                    ax.scatter(lons[0], lats[0], c=c, s=30, marker="o",
-                              edgecolors=_BRIGHT, linewidths=0.8, zorder=4)
-                    ax.scatter(lons[-1], lats[-1], c=c, s=30, marker="s",
-                              edgecolors=_BRIGHT, linewidths=0.8, zorder=4)
+                    ax.plot(lons, lats, color=c, linewidth=lw, alpha=alpha,
+                            label=name[:25], zorder=5 if is_selected else 2)
+                    if is_selected:
+                        ax.plot(lons, lats, color=c, linewidth=5, alpha=0.12, zorder=1)
+                        ax.scatter(lons[0], lats[0], c=c, s=30, marker="o",
+                                  edgecolors=_BRIGHT, linewidths=0.8, zorder=6)
+                        ax.scatter(lons[-1], lats[-1], c=c, s=30, marker="s",
+                                  edgecolors=_BRIGHT, linewidths=0.8, zorder=6)
         else:
             lats = data.get("track_lats")
             lons = data.get("track_lons")
@@ -609,6 +613,43 @@ class MBESChartWidget(QFrame):
         self._save_home()
         self._canvas.draw()
         self.set_title("Cross-line QC")
+
+    def render_motion_perline(self, data: dict):
+        """Per-line motion statistics: horizontal grouped bar chart."""
+        self._fig.clear()
+        ax = self._fig.add_subplot(111)
+        _dark_ax(ax, "Motion QC -- Per-line Statistics")
+
+        per_line = data.get("per_line", [])
+        if not per_line:
+            ax.text(0.5, 0.5, "Per-line 데이터 없음", transform=ax.transAxes,
+                    ha="center", va="center", color=_TEXT_DIM, fontsize=12)
+            self._canvas.draw()
+            return
+
+        names = [p.get("filename", "?")[:20] for p in per_line]
+        roll_vals = [p.get("roll_std", 0) for p in per_line]
+        pitch_vals = [p.get("pitch_std", 0) for p in per_line]
+        heave_vals = [p.get("heave_std", 0) for p in per_line]
+
+        y = np.arange(len(names))
+        h = 0.25
+
+        ax.barh(y - h, roll_vals, height=h, color=_CYAN, alpha=0.85, label="Roll σ (°)")
+        ax.barh(y, pitch_vals, height=h, color=_EMERALD, alpha=0.85, label="Pitch σ (°)")
+        ax.barh(y + h, heave_vals, height=h, color=_AMBER, alpha=0.85, label="Heave σ (m)")
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(names, fontsize=7, color=_TEXT)
+        ax.set_xlabel("Standard Deviation", color=_TEXT, fontsize=10)
+        ax.legend(loc="lower right", fontsize=7, facecolor=_CARD,
+                  edgecolor=_BORDER, labelcolor=_TEXT, framealpha=0.9)
+
+        ax.invert_yaxis()
+        self._fig.tight_layout()
+        self._save_home()
+        self._canvas.draw()
+        self.set_title("Motion QC (Per-line)")
 
     def render_radar(self, scores: dict[str, float]):
         """QC score radar with premium styling."""

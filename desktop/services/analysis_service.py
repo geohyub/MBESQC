@@ -6,6 +6,7 @@ Uses mbes_qc.runner.run_full_qc() as the primary QC engine (GSF-first strategy).
 from __future__ import annotations
 
 import json
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -167,6 +168,34 @@ def serialize_full_qc_result(result) -> dict:
             "pitch_verdict": getattr(oq, "pitch_verdict", "N/A"),
         }
 
+    # Offset Validation (OffsetManager)
+    ov = getattr(result, "offset_validation", None)
+    if ov:
+        try:
+            ov_data = {
+                "overall": getattr(ov, "overall", "N/A"),
+                "vessel_name": getattr(ov, "vessel_name", ""),
+            }
+            config_checks = getattr(ov, "config_checks", [])
+            if config_checks:
+                ov_data["config_checks"] = [
+                    {"sensor": getattr(c, "sensor", ""), "field": getattr(c, "field", ""),
+                     "pds_value": str(getattr(c, "pds_value", "")),
+                     "om_value": str(getattr(c, "om_value", "")),
+                     "status": getattr(c, "status", "N/A")}
+                    for c in config_checks
+                ]
+            data_checks = getattr(ov, "data_checks", [])
+            if data_checks:
+                ov_data["data_checks"] = [
+                    {"name": getattr(c, "name", ""), "status": getattr(c, "status", "N/A"),
+                     "detail": getattr(c, "detail", "")}
+                    for c in data_checks
+                ]
+            d["offset_validation"] = ov_data
+        except Exception:
+            pass
+
     # Motion QC
     mq = getattr(result, "motion_qc", None)
     if mq:
@@ -191,6 +220,22 @@ def serialize_full_qc_result(result) -> dict:
             "max_gap_sec": _sf(getattr(mq, "max_gap_sec", 0)),
             "gap_verdict": gap_verdict,
         }
+
+    # Motion per-line
+    mpl = getattr(result, "motion_per_line", None)
+    if mpl and mq:
+        per_line = []
+        for p in mpl:
+            per_line.append({
+                "filename": getattr(p, "filename", ""),
+                "roll_std": _sf(getattr(p.roll, "std", 0)) if hasattr(p, "roll") else 0,
+                "roll_verdict": getattr(p.roll, "verdict", "N/A") if hasattr(p, "roll") else "N/A",
+                "pitch_std": _sf(getattr(p.pitch, "std", 0)) if hasattr(p, "pitch") else 0,
+                "pitch_verdict": getattr(p.pitch, "verdict", "N/A") if hasattr(p, "pitch") else "N/A",
+                "heave_std": _sf(getattr(p.heave, "std", 0)) if hasattr(p, "heave") else 0,
+                "heave_verdict": getattr(p.heave, "verdict", "N/A") if hasattr(p, "heave") else "N/A",
+            })
+        d["motion"]["per_line"] = per_line
 
     # SVP QC
     sq = getattr(result, "svp_qc", None)
@@ -248,6 +293,19 @@ def serialize_full_qc_result(result) -> dict:
             "striping_detected": bool(getattr(xq, "striping_detected", False)),
             "items": [{"name": i.get("name",""), "status": i.get("status",""), "detail": i.get("detail","")} for i in getattr(xq, "items", [])],
         }
+        # Intersection pair details
+        idet = getattr(xq, "intersection_details", None)
+        if idet:
+            d["crossline"]["intersection_details"] = [
+                {
+                    "line1": det.get("line1", 0),
+                    "line2": det.get("line2", 0),
+                    "n_cells": int(det.get("n_cells", 0)),
+                    "mean_diff": _sf(det.get("mean_diff", 0)),
+                    "std_diff": _sf(det.get("std_diff", 0)),
+                }
+                for det in idet
+            ]
 
     # ── Chart data arrays (downsampled for rendering) ──
     # Motion: attitude time series from first GSF
@@ -329,6 +387,11 @@ class AnalysisWorker(QObject):
         self._max_pings = max_pings if max_pings > 0 else None
         self._cell_size = cell_size
         self._max_gsf = max_gsf_files if max_gsf_files > 0 else 0
+        self._stop_event = threading.Event()
+
+    def cancel(self):
+        """Request cancellation of the running QC pipeline."""
+        self._stop_event.set()
 
     def _resolve_hvf(self) -> str | None:
         """Resolve HVF: accept file path or directory (pick first .hvf)."""
@@ -379,11 +442,9 @@ class AnalysisWorker(QObject):
             hvf = self._resolve_hvf()
             gsf_paths = self._resolve_gsf_paths()
 
-            if gsf_paths:
-                n = len(gsf_paths)
-                self.stage.emit(2, f"run_full_qc 실행 (GSF {n}개)...")
-            else:
-                self.stage.emit(2, "run_full_qc 실행...")
+            def _progress_cb(current, total, desc):
+                self.progress.emit(current, total)
+                self.stage.emit(current, desc)
 
             result = run_full_qc(
                 gsf_paths=gsf_paths,
@@ -393,7 +454,17 @@ class AnalysisWorker(QObject):
                 cell_size=self._cell_size,
                 generate_surfaces=True,
                 generate_reports=False,
+                progress_callback=_progress_cb,
+                stop_event=self._stop_event,
             )
+
+            if getattr(result, "cancelled", False):
+                self.stage.emit(0, "QC 취소됨")
+                DataService.update_qc_result(
+                    self._result_id, status="cancelled",
+                    finished_at=datetime.now().isoformat(),
+                )
+                return
 
             self.stage.emit(3, "결과 직렬화...")
 

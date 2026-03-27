@@ -210,6 +210,6 @@ add_table([
 ], ['PDS-Only Capability', 'Confidence'])
 
 # Save
-output = r'E:\Software\MBESQC\docs\PDS_Format_Reverse_Engineering_Report.docx'
+output = r'E:\Software\QC\MBESQC\docs\PDS_Format_Reverse_Engineering_Report.docx'
 doc.save(output)
 print(f'Report saved: {output}')

@@ -183,6 +183,63 @@ def run_motion_qc(gsf: GsfFile) -> MotionQcResult:
     return result
 
 
+@dataclass
+class PerLineMotion:
+    """Per-line (per-GSF-file) motion statistics."""
+    filename: str = ""
+    roll: AxisStats = field(default_factory=lambda: AxisStats(name="Roll", unit="°"))
+    pitch: AxisStats = field(default_factory=lambda: AxisStats(name="Pitch", unit="°"))
+    heave: AxisStats = field(default_factory=lambda: AxisStats(name="Heave", unit="m"))
+
+
+def run_motion_qc_multi(gsf_files: list[GsfFile]) -> tuple[MotionQcResult, list[PerLineMotion]]:
+    """Run motion QC on multiple GSF files, returning overall + per-line stats.
+
+    Overall result uses the first GSF file (same as single-file mode).
+    Per-line results compute independent statistics per file.
+    """
+    from pathlib import Path
+
+    overall = run_motion_qc(gsf_files[0]) if gsf_files else MotionQcResult()
+    per_line = []
+
+    for gsf in gsf_files:
+        plm = PerLineMotion(filename=Path(gsf.filepath).name if hasattr(gsf, "filepath") else "")
+
+        if not gsf.attitude_records:
+            per_line.append(plm)
+            continue
+
+        all_times = gsf.all_attitude_times()
+        all_roll = gsf.all_attitude_roll()
+        all_pitch = gsf.all_attitude_pitch()
+        all_heave = gsf.all_attitude_heave()
+
+        if len(all_times) < 10:
+            per_line.append(plm)
+            continue
+
+        sort_idx = np.argsort(all_times)
+        all_times = all_times[sort_idx]
+        all_roll = all_roll[sort_idx]
+        all_pitch = all_pitch[sort_idx]
+        all_heave = all_heave[sort_idx]
+
+        plm.roll = _compute_axis_stats(
+            all_times, all_roll, "Roll", "°",
+            _ROLL_RATE_THRESHOLD, _ROLL_STD_WARN, _ROLL_STD_FAIL)
+        plm.pitch = _compute_axis_stats(
+            all_times, all_pitch, "Pitch", "°",
+            _PITCH_RATE_THRESHOLD, _PITCH_STD_WARN, _PITCH_STD_FAIL)
+        plm.heave = _compute_axis_stats(
+            all_times, all_heave, "Heave", "m",
+            _HEAVE_RATE_THRESHOLD, _HEAVE_STD_WARN, _HEAVE_STD_FAIL)
+
+        per_line.append(plm)
+
+    return overall, per_line
+
+
 def _compute_axis_stats(
     times: np.ndarray,
     values: np.ndarray,

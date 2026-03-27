@@ -227,7 +227,7 @@ except Exception as e:
 print("\n[12/13] OffsetManager DB...")
 try:
     import sqlite3
-    conn = sqlite3.connect(r"E:\Software\GeoView_Suite\OffsetManager\offsets.db")
+    conn = sqlite3.connect(r"E:\Software\Preprocessing\OffsetManager\offsets.db")
     conn.row_factory = sqlite3.Row
     configs = conn.execute("SELECT * FROM vessel_configs").fetchall()
     sensors = conn.execute("SELECT * FROM sensor_offsets").fetchall()

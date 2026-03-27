@@ -274,7 +274,7 @@ def generate_main_report():
         ("+ S7K Raw", "원시 vs 처리 수심 비교, 모션 보정 전후 비교", "95%"),
     ], ["추가 파일", "새로 가능해지는 기능", "신뢰도"])
 
-    output = r"E:\Software\MBESQC\docs\PDS_포맷_역공학_보고서.docx"
+    output = r"E:\Software\QC\MBESQC\docs\PDS_포맷_역공학_보고서.docx"
     doc.save(output)
     print(f"한글 보고서 저장: {output}")
 
@@ -453,7 +453,7 @@ def generate_byte_level_doc():
         ("BadaEnergy", "T50-ER", "EDF와 동일", "67/72/139 KB", "표준 레이아웃"),
     ], ["프로젝트", "소나", "레이아웃 특성", "핑 크기", "비고"])
 
-    output = r"E:\Software\MBESQC\docs\PDS_바이트레벨_사양서.docx"
+    output = r"E:\Software\QC\MBESQC\docs\PDS_바이트레벨_사양서.docx"
     doc.save(output)
     print(f"바이트 레벨 문서 저장: {output}")
 

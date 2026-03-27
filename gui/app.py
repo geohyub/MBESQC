@@ -21,7 +21,7 @@ from typing import List, Dict, Optional
 import customtkinter as ctk
 
 # ── sys.path for _shared and project root ────────────────────────
-_shared = Path(__file__).resolve().parents[2] / "_shared"
+_shared = Path(__file__).resolve().parents[3] / "_shared"
 if not _shared.exists():
     _shared = Path("E:/Software/_shared")
 if _shared.exists() and str(_shared) not in sys.path:

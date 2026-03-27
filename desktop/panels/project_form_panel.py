@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Dark, Font, Space, Radius, BTN_PRIMARY, BTN_SECONDARY
 
 from desktop.services.data_service import DataService
 
@@ -83,7 +83,7 @@ class ProjectFormPanel(QWidget):
         # Form
         form = QFormLayout()
         form.setSpacing(Space.MD)
-        form.setLabelAlignment(Qt.AlignRight)
+        form.setLabelAlignment(Qt.AlignLeft)
 
         label_style = f"""
             font-size: {Font.SM}px;
@@ -184,6 +184,15 @@ class ProjectFormPanel(QWidget):
         pings_label.setStyleSheet(label_style)
         form.addRow(pings_label, self._max_pings)
 
+        # OffsetManager config
+        self._om_combo = QComboBox()
+        self._om_combo.setStyleSheet(_INPUT_STYLE)
+        self._om_combo.addItem("(연결 안 됨)", -1)
+        om_label = QLabel("OffsetManager")
+        om_label.setStyleSheet(label_style)
+        form.addRow(om_label, self._om_combo)
+        self._load_om_configs()
+
         layout.addLayout(form)
 
         # Buttons
@@ -193,38 +202,14 @@ class ProjectFormPanel(QWidget):
         cancel_btn = QPushButton("취소")
         cancel_btn.setFixedSize(100, 36)
         cancel_btn.setCursor(Qt.PointingHandCursor)
-        cancel_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {Dark.MUTED};
-                border: 1px solid {Dark.BORDER};
-                border-radius: {Radius.SM}px;
-                font-size: {Font.SM}px;
-            }}
-            QPushButton:hover {{
-                background: {Dark.DARK};
-                color: {Dark.TEXT};
-            }}
-        """)
+        cancel_btn.setStyleSheet(BTN_SECONDARY)
         cancel_btn.clicked.connect(self.cancelled.emit)
         btn_row.addWidget(cancel_btn)
 
         save_btn = QPushButton("저장")
         save_btn.setFixedSize(100, 36)
         save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {Dark.GREEN};
-                color: {Dark.BG};
-                border: none;
-                border-radius: {Radius.SM}px;
-                font-size: {Font.SM}px;
-                font-weight: {Font.SEMIBOLD};
-            }}
-            QPushButton:hover {{
-                background: #0ea572;
-            }}
-        """)
+        save_btn.setStyleSheet(BTN_PRIMARY)
         save_btn.clicked.connect(self._on_save)
         btn_row.addWidget(save_btn)
 
@@ -284,11 +269,30 @@ class ProjectFormPanel(QWidget):
         self._max_gsf.setValue(p.get("max_gsf_files", 50))
         self._max_pings.setValue(p.get("max_pings", 0))
 
+    def _load_om_configs(self):
+        """Load OffsetManager configs into combo box."""
+        try:
+            from desktop.services.om_client import OMClient
+            if OMClient.is_available():
+                configs = OMClient.list_configs()
+                self._om_combo.clear()
+                self._om_combo.addItem("(선택 안 함)", -1)
+                for c in configs:
+                    label = f"{c.get('vessel_name', '?')} — {c.get('project_name', '')}"
+                    self._om_combo.addItem(label, c.get("id", -1))
+            else:
+                self._om_combo.clear()
+                self._om_combo.addItem("(OffsetManager 미연결)", -1)
+        except Exception:
+            self._om_combo.clear()
+            self._om_combo.addItem("(OM 로딩 실패)", -1)
+
     def _on_save(self):
         name = self._name_input.text().strip()
         if not name:
             return
 
+        om_id = self._om_combo.currentData()
         kwargs = dict(
             vessel=self._vessel_input.text().strip(),
             pds_dir=self._pds_input.text().strip(),
@@ -297,6 +301,7 @@ class ProjectFormPanel(QWidget):
             cell_size=self._cell_size.value(),
             max_gsf_files=self._max_gsf.value(),
             max_pings=self._max_pings.value(),
+            om_config_id=om_id if om_id and om_id > 0 else None,
         )
 
         if self._edit_id is not None:

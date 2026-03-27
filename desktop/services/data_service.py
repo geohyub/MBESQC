@@ -93,7 +93,7 @@ class DataService:
         vals = [name, vessel, datetime.now().isoformat()]
 
         for k in ("pds_dir", "gsf_dir", "hvf_dir", "s7k_dir", "fau_dir",
-                   "om_config_id", "max_pings", "cell_size",
+                   "om_config_id", "max_pings", "max_gsf_files", "cell_size",
                    "lat_min", "lat_max", "lon_min", "lon_max"):
             if k in kwargs:
                 cols.append(k)

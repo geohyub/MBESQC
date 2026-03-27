@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Dark, Font, Space, Radius, TABLE_STYLE, BTN_PRIMARY
 from geoview_pyside6.widgets import KPICard
 
 from desktop.services.data_service import DataService
@@ -65,20 +65,7 @@ class DashboardPanel(QWidget):
 
         new_btn = QPushButton("+ 새 프로젝트")
         new_btn.setCursor(Qt.PointingHandCursor)
-        new_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {Dark.GREEN};
-                color: {Dark.BG};
-                border: none;
-                border-radius: {Radius.SM}px;
-                padding: 6px 16px;
-                font-size: {Font.SM}px;
-                font-weight: {Font.SEMIBOLD};
-            }}
-            QPushButton:hover {{
-                background: #0ea572;
-            }}
-        """)
+        new_btn.setStyleSheet(BTN_PRIMARY)
         new_btn.clicked.connect(self.new_project.emit)
         header_row.addWidget(new_btn)
         layout.addLayout(header_row)
@@ -99,34 +86,7 @@ class DashboardPanel(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.setShowGrid(False)
 
-        self._table.setStyleSheet(f"""
-            QTableWidget {{
-                background: {Dark.DARK};
-                alternate-background-color: {Dark.BG_ALT};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
-                border-radius: {Radius.SM}px;
-                gridline-color: transparent;
-                font-size: {Font.SM}px;
-            }}
-            QTableWidget::item {{
-                padding: 6px 8px;
-                border: none;
-            }}
-            QTableWidget::item:selected {{
-                background: {Dark.SLATE};
-            }}
-            QHeaderView::section {{
-                background: {Dark.NAVY};
-                color: {Dark.MUTED};
-                font-size: {Font.XS}px;
-                font-weight: {Font.MEDIUM};
-                border: none;
-                border-bottom: 1px solid {Dark.BORDER};
-                padding: 6px 8px;
-                text-align: left;
-            }}
-        """)
+        self._table.setStyleSheet(TABLE_STYLE)
 
         self._table.doubleClicked.connect(self._on_double_click)
         layout.addWidget(self._table)

@@ -3,7 +3,7 @@
 Multibeam Echosounder data quality control web interface.
 PDS 파일 하나 넣으면 전체 QC 자동 실행.
 
-Port: 5016
+Port: 5103
 Copyright (c) 2025-2026 Geoview Co., Ltd.
 """
 
@@ -38,7 +38,7 @@ _job_counter = 0
 _project_counter = 0
 _lock = threading.Lock()
 
-OM_DB_PATH = r"E:\Software\GeoView_Suite\OffsetManager\offsets.db"
+OM_DB_PATH = r"E:\Software\Preprocessing\OffsetManager\offsets.db"
 
 
 def _next_id(counter_name: str) -> int:
@@ -196,7 +196,7 @@ def qc_result(job_id):
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok", "module": "MBES QC", "port": 5016, "jobs": len(_jobs)})
+    return jsonify({"status": "ok", "module": "MBES QC", "port": 5103, "jobs": len(_jobs)})
 
 
 def _validate_pds_path(pds_path: str) -> str | None:
@@ -410,19 +410,17 @@ def api_verify_offsets():
         if om_config_id:
             try:
                 import sqlite3
-                conn = sqlite3.connect(OM_DB_PATH)
-                conn.row_factory = sqlite3.Row
-                row = conn.execute(
-                    "SELECT * FROM vessel_configs WHERE id = ?", (om_config_id,)
-                ).fetchone()
-                if row:
-                    om_data = dict(row)
-                    result["om_comparison"] = {
-                        "vessel": om_data.get("vessel_name", ""),
-                        "project": om_data.get("project_name", ""),
-                    }
-                    # Compare OM offsets with PDS offsets (if stored in OM)
-                conn.close()
+                with sqlite3.connect(OM_DB_PATH) as conn:
+                    conn.row_factory = sqlite3.Row
+                    row = conn.execute(
+                        "SELECT * FROM vessel_configs WHERE id = ?", (om_config_id,)
+                    ).fetchone()
+                    if row:
+                        om_data = dict(row)
+                        result["om_comparison"] = {
+                            "vessel": om_data.get("vessel_name", ""),
+                            "project": om_data.get("project_name", ""),
+                        }
             except Exception:
                 pass
 
@@ -955,9 +953,8 @@ def api_crossline_compare():
 
 @app.route("/api/om-configs")
 def api_om_configs():
-    """List OffsetManager vessel configs. Optional ?db_path= param."""
-    db_path = request.args.get("db_path", OM_DB_PATH)
-    return jsonify(_load_om_configs(db_path))
+    """List OffsetManager vessel configs."""
+    return jsonify(_load_om_configs(OM_DB_PATH))
 
 
 @app.route("/api/om-sensors/<int:config_id>")
@@ -965,8 +962,7 @@ def api_om_sensors(config_id):
     """Get sensor offsets for a specific OffsetManager config."""
     try:
         import sqlite3
-        db_path = request.args.get("db_path", OM_DB_PATH)
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(OM_DB_PATH)
         conn.row_factory = sqlite3.Row
 
         # Config info
@@ -982,7 +978,7 @@ def api_om_sensors(config_id):
             "SELECT * FROM sensor_offsets WHERE config_id = ? ORDER BY sensor_type, sensor_name",
             (config_id,)
         ).fetchall()
-        conn.close()
+        conn.close()  # Note: kept manual close here due to early return above
 
         # Sensor type Korean labels
         type_labels = {
@@ -1381,4 +1377,4 @@ def _load_om_configs(db_path: str = None) -> list[dict]:
 # ── Main ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    app.run(port=5016, debug=os.environ.get("FLASK_DEBUG", "0") == "1")
+    app.run(port=5103, debug=os.environ.get("FLASK_DEBUG", "0") == "1")

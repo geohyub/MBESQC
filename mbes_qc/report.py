@@ -27,7 +27,7 @@ except ImportError:
 try:
     import sys as _sys
     from pathlib import Path as _Path
-    _shared = _Path(__file__).resolve().parents[2] / "_shared"
+    _shared = _Path(__file__).resolve().parents[3] / "_shared"
     if _shared.exists() and str(_shared) not in _sys.path:
         _sys.path.insert(0, str(_shared))
     from geoview_common.reporting.design_system import WordBuilder, WORD_STYLES

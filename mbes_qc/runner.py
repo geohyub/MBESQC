@@ -7,9 +7,11 @@ Coverage QC, Cross-line QC, Surface Generation, and Report output.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -40,7 +42,10 @@ class FullQcResult:
     coverage_qc: CoverageQcResult | None = None
     crossline_qc: CrosslineResult | None = None
     surface: SurfaceResult | None = None
+    motion_per_line: list = field(default_factory=list)
+    offset_validation: object | None = None
     elapsed_sec: float = 0.0
+    cancelled: bool = False
 
     def as_dict(self) -> dict:
         """Convert to ordered dict for report generation."""
@@ -71,6 +76,8 @@ def run_full_qc(
     offsetmanager_db: str | Path | None = None,
     lat_range: tuple[float, float] = (-90.0, 90.0),
     lon_range: tuple[float, float] = (-180.0, 180.0),
+    progress_callback: Callable[[int, int, str], None] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> FullQcResult:
     """Execute complete MBES QC pipeline.
 
@@ -93,6 +100,19 @@ def run_full_qc(
     if out:
         out.mkdir(parents=True, exist_ok=True)
 
+    _TOTAL_STEPS = 12
+
+    def _notify(step: int, desc: str):
+        if progress_callback:
+            progress_callback(step, _TOTAL_STEPS, desc)
+
+    def _stopped() -> bool:
+        if stop_event and stop_event.is_set():
+            result.elapsed_sec = time.time() - t0
+            result.cancelled = True
+            return True
+        return False
+
     # Resolve GSF file list
     gsf_file_list = []
     if gsf_dir:
@@ -110,6 +130,9 @@ def run_full_qc(
         pds_file_list = [Path(pds_path)]
 
     # ── 0. Pre-Processing Check ─────────────────────────────
+    _notify(0, "전처리 검증...")
+    if _stopped():
+        return result
     if pds_file_list:
         _header("0. Pre-Processing Validation")
         result.preprocess = validate_preprocess(
@@ -123,6 +146,9 @@ def run_full_qc(
         print_validation_report(result.preprocess)
 
     # ── A. File QC ──────────────────────────────────────────
+    _notify(1, "파일 무결성 QC...")
+    if _stopped():
+        return result
     _header("A. File Integrity QC")
     result.file_qc = run_file_qc(
         gsf_files=[str(f) for f in gsf_file_list],
@@ -131,6 +157,9 @@ def run_full_qc(
     _print_items(result.file_qc.items)
 
     # ── B. Vessel QC ────────────────────────────────────────
+    _notify(2, "선박/오프셋 설정 QC...")
+    if _stopped():
+        return result
     if pds_file_list:
         _header("B. Vessel/Offset Config QC")
         result.vessel_qc = run_vessel_qc(pds_file_list[0], hvf_path)
@@ -139,7 +168,11 @@ def run_full_qc(
     # ── Load GSF data ───────────────────────────────────────
     _header("Loading GSF data")
     gsf_objects = []
-    for f in gsf_file_list:
+    gsf_total = len(gsf_file_list)
+    for i, f in enumerate(gsf_file_list):
+        _notify(3, f"GSF 로딩 {i + 1}/{gsf_total}: {f.name}")
+        if _stopped():
+            return result
         gsf = read_gsf(f, max_pings=max_pings, load_attitude=True, load_svp=True)
         gsf_objects.append(gsf)
         print(f"  {f.name}: {gsf.num_pings} pings, {gsf.num_attitude} att")
@@ -152,18 +185,42 @@ def run_full_qc(
     # Use first file for single-file analyses
     gsf_main = gsf_objects[0]
 
+    # ── Offset Validation (OffsetManager) ────────────────────
+    if pds_file_list and offsetmanager_db:
+        try:
+            from .offset_validator import validate_offsets
+            result.offset_validation = validate_offsets(
+                pds_file_list[0],
+                offsetmanager_db=str(offsetmanager_db),
+            )
+        except Exception as e:
+            print(f"  Offset validation skipped: {e}")
+
     # ── C. Offset QC ────────────────────────────────────────
+    _notify(4, "오프셋 검증...")
+    if _stopped():
+        return result
     _header("C. Offset Verification")
     hvf = read_hvf(hvf_path) if hvf_path else None
     result.offset_qc = run_offset_qc(gsf_main, hvf)
     _print_offset(result.offset_qc)
 
     # ── D. Motion QC ────────────────────────────────────────
+    _notify(5, "모션 데이터 검증...")
+    if _stopped():
+        return result
     _header("D. Motion Verification")
-    result.motion_qc = run_motion_qc(gsf_main)
+    if len(gsf_objects) >= 2:
+        from .motion_qc import run_motion_qc_multi
+        result.motion_qc, result.motion_per_line = run_motion_qc_multi(gsf_objects)
+    else:
+        result.motion_qc = run_motion_qc(gsf_main)
     _print_motion(result.motion_qc)
 
     # ── E. SVP QC ───────────────────────────────────────────
+    _notify(6, "음속 프로파일 검증...")
+    if _stopped():
+        return result
     _header("E. SVP Verification")
     pds_svp = False
     if result.vessel_qc:
@@ -172,6 +229,9 @@ def run_full_qc(
     _print_items_dict(result.svp_qc.items)
 
     # ── F. Coverage QC ──────────────────────────────────────
+    _notify(7, "커버리지 분석...")
+    if _stopped():
+        return result
     if len(gsf_objects) >= 2:
         _header("F. Coverage Analysis")
         result.coverage_qc = run_coverage_qc(gsf_objects)
@@ -180,12 +240,18 @@ def run_full_qc(
         _print_items_dict(result.coverage_qc.items)
 
     # ── G. Cross-line QC ────────────────────────────────────
+    _notify(8, "크로스라인 분석...")
+    if _stopped():
+        return result
     if len(gsf_objects) >= 2:
         _header("G. Cross-line Analysis")
         result.crossline_qc = run_crossline_qc(gsf_objects, cell_size, iho_order)
         _print_items_dict(result.crossline_qc.items)
 
     # ── Surface Generation ──────────────────────────────────
+    _notify(9, "서피스 생성...")
+    if _stopped():
+        return result
     if generate_surfaces and gsf_main.num_pings > 0:
         _header("Surface Generation")
         surf_dir = out / "surfaces" if out else None
@@ -193,6 +259,9 @@ def run_full_qc(
         _print_surface(result.surface)
 
     # ── Exports (Contour, Trackline, Allsounding, TFW) ────
+    _notify(10, "내보내기...")
+    if _stopped():
+        return result
     if generate_reports and out:
         from .export import (
             export_contour_dxf, export_contour_csv,
@@ -231,7 +300,17 @@ def run_full_qc(
                 n = generate_all_tfw(result.surface, surf_dir)
                 print(f"  TFW files: {n}")
 
+    # Release GSF list memory (gsf_main still held for report)
+    try:
+        del gsf_objects
+    except NameError:
+        pass
+    import gc; gc.collect()
+
     # ── Reports ─────────────────────────────────────────────
+    _notify(11, "보고서 생성...")
+    if _stopped():
+        return result
     result.elapsed_sec = time.time() - t0
     qc_dict = result.as_dict()
 

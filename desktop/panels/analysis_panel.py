@@ -12,11 +12,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea, QGridLayout,
-    QSizePolicy, QStackedWidget,
+    QSizePolicy, QStackedWidget, QProgressBar,
+    QTableWidget, QTableWidgetItem, QComboBox, QHeaderView,
 )
 from PySide6.QtCore import Qt, Signal, QThread, Slot, QObject
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Dark, Font, Space, Radius, TABLE_STYLE, STATUS_ICONS, BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER
 
 from desktop.services.data_service import DataService
 from desktop.services.analysis_service import AnalysisWorker, compute_score
@@ -95,6 +96,7 @@ class _AnalysisCard(QFrame):
                 border-radius: {Radius.SM}px;
             }}
             _AnalysisCard:hover {{
+                background: {Dark.NAVY};
                 border-color: {Dark.CYAN};
             }}
         """)
@@ -158,7 +160,8 @@ class _AnalysisCard(QFrame):
 
     def set_result(self, status: str, score: float = 0.0):
         color = _color_for_status(status)
-        self._status_label.setText(status)
+        icon = STATUS_ICONS.get(status, "")
+        self._status_label.setText(f"{icon} {status}" if icon else status)
         self._status_label.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
@@ -220,7 +223,7 @@ class AnalysisPanel(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(Space.XL, Space.LG, Space.XL, Space.XL)
+        layout.setContentsMargins(Space.XL, Space.LG, Space.XXXL, Space.XL)
         layout.setSpacing(Space.LG)
 
         # Header: file name + score ring
@@ -252,23 +255,7 @@ class AnalysisPanel(QWidget):
         self._run_btn = QPushButton("QC 실행")
         self._run_btn.setCursor(Qt.PointingHandCursor)
         self._run_btn.setFixedSize(100, 36)
-        self._run_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: {Dark.GREEN};
-                color: {Dark.BG};
-                border: none;
-                border-radius: {Radius.SM}px;
-                font-size: {Font.SM}px;
-                font-weight: {Font.SEMIBOLD};
-            }}
-            QPushButton:hover {{
-                background: #0ea572;
-            }}
-            QPushButton:disabled {{
-                background: {Dark.SLATE};
-                color: {Dark.DIM};
-            }}
-        """)
+        self._run_btn.setStyleSheet(BTN_PRIMARY)
         self._run_btn.clicked.connect(self._run_qc)
         header.addWidget(self._run_btn)
 
@@ -277,7 +264,8 @@ class AnalysisPanel(QWidget):
 
         layout.addLayout(header)
 
-        # Progress label
+        # Progress bar + cancel button
+        progress_row = QHBoxLayout()
         self._progress_label = QLabel("")
         self._progress_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
@@ -285,7 +273,39 @@ class AnalysisPanel(QWidget):
             background: transparent;
         """)
         self._progress_label.setVisible(False)
-        layout.addWidget(self._progress_label)
+        progress_row.addWidget(self._progress_label)
+
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setRange(0, 12)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setFixedHeight(16)
+        self._progress_bar.setVisible(False)
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {Dark.DARK};
+                border: 1px solid {Dark.BORDER};
+                border-radius: 8px;
+                text-align: center;
+                color: {Dark.TEXT};
+                font-size: {Font.XS}px;
+            }}
+            QProgressBar::chunk {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {Dark.CYAN}, stop:1 {Dark.GREEN});
+                border-radius: 7px;
+            }}
+        """)
+        progress_row.addWidget(self._progress_bar, 1)
+
+        self._cancel_btn = QPushButton("취소")
+        self._cancel_btn.setCursor(Qt.PointingHandCursor)
+        self._cancel_btn.setFixedSize(60, 24)
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.setStyleSheet(BTN_DANGER)
+        self._cancel_btn.clicked.connect(self._cancel_qc)
+        progress_row.addWidget(self._cancel_btn)
+
+        layout.addLayout(progress_row)
 
         # QC cards grid (4 columns x 2 rows)
         cards_label = QLabel("QC 모듈 결과")
@@ -310,6 +330,102 @@ class AnalysisPanel(QWidget):
             self._cards[qc_id] = card
 
         layout.addLayout(self._cards_grid)
+
+        # ── Module Detail Panel (items table) ──
+        self._detail_frame = QFrame()
+        self._detail_frame.setVisible(False)
+        self._detail_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {Dark.DARK};
+                border: 1px solid {Dark.BORDER};
+                border-radius: {Radius.SM}px;
+            }}
+        """)
+        detail_layout = QVBoxLayout(self._detail_frame)
+        detail_layout.setContentsMargins(Space.MD, Space.SM, Space.MD, Space.SM)
+
+        self._detail_title = QLabel("")
+        self._detail_title.setStyleSheet(f"""
+            font-size: {Font.SM}px; font-weight: {Font.SEMIBOLD};
+            color: {Dark.TEXT_BRIGHT}; background: transparent;
+        """)
+        detail_layout.addWidget(self._detail_title)
+
+        self._detail_table = QTableWidget()
+        self._detail_table.setColumnCount(3)
+        self._detail_table.setHorizontalHeaderLabels(["Status", "항목", "상세"])
+        self._detail_table.horizontalHeader().setStretchLastSection(True)
+        self._detail_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._detail_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._detail_table.verticalHeader().setVisible(False)
+        self._detail_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._detail_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._detail_table.setMaximumHeight(200)
+        self._detail_table.setStyleSheet(TABLE_STYLE)
+        detail_layout.addWidget(self._detail_table)
+        layout.addWidget(self._detail_frame)
+
+        # ── Per-line Filter + Table (Coverage/Motion) ──
+        self._line_filter_frame = QFrame()
+        self._line_filter_frame.setVisible(False)
+        lf_layout = QHBoxLayout(self._line_filter_frame)
+        lf_layout.setContentsMargins(0, 0, 0, 0)
+
+        lf_label = QLabel("라인 선택:")
+        lf_label.setStyleSheet(f"font-size: {Font.XS}px; color: {Dark.MUTED}; background: transparent;")
+        lf_layout.addWidget(lf_label)
+
+        self._line_filter = QComboBox()
+        self._line_filter.setFixedWidth(250)
+        self._line_filter.setStyleSheet(f"""
+            QComboBox {{
+                background: {Dark.DARK};
+                color: {Dark.TEXT};
+                border: 1px solid {Dark.BORDER};
+                border-radius: {Radius.SM}px;
+                padding: 4px 8px;
+                font-size: {Font.XS}px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+        """)
+        self._line_filter.currentIndexChanged.connect(self._on_line_filter_changed)
+        lf_layout.addWidget(self._line_filter)
+
+        self._motion_toggle = QPushButton("Per-line")
+        self._motion_toggle.setCheckable(True)
+        self._motion_toggle.setFixedSize(80, 24)
+        self._motion_toggle.setVisible(False)
+        self._motion_toggle.setStyleSheet(f"""
+            QPushButton {{
+                background: {Dark.SLATE};
+                color: {Dark.TEXT};
+                border: none;
+                border-radius: {Radius.SM}px;
+                font-size: {Font.XS}px;
+            }}
+            QPushButton:checked {{
+                background: {Dark.CYAN};
+                color: {Dark.BG};
+            }}
+        """)
+        self._motion_toggle.toggled.connect(self._on_motion_toggle)
+        lf_layout.addWidget(self._motion_toggle)
+
+        lf_layout.addStretch()
+        layout.addWidget(self._line_filter_frame)
+
+        self._line_table = QTableWidget()
+        self._line_table.setVisible(False)
+        self._line_table.setColumnCount(6)
+        self._line_table.setHorizontalHeaderLabels(
+            ["라인", "방향(°)", "길이(m)", "평균수심(m)", "스와스(m)", "핑 수"])
+        self._line_table.horizontalHeader().setStretchLastSection(True)
+        self._line_table.verticalHeader().setVisible(False)
+        self._line_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._line_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._line_table.setMaximumHeight(200)
+        self._line_table.setStyleSheet(TABLE_STYLE)
+        layout.addWidget(self._line_table)
 
         # Interactive chart widget
         self._chart = MBESChartWidget()
@@ -367,11 +483,29 @@ class AnalysisPanel(QWidget):
     def _on_card_clicked(self, qc_id: str):
         """Render interactive chart for the selected QC module."""
         section = self._result_data.get(qc_id, {})
+
+        # ── Update detail panel (items) ──
+        self._update_detail_panel(qc_id, section)
+
+        # ── Line table / filter visibility ──
+        show_lines = qc_id == "coverage" and section.get("lines")
+        show_motion_toggle = qc_id == "motion" and section.get("per_line")
+        self._line_table.setVisible(show_lines)
+        self._line_filter_frame.setVisible(show_lines or show_motion_toggle)
+        self._motion_toggle.setVisible(show_motion_toggle)
+        self._line_filter.setVisible(show_lines)
+
+        if show_lines:
+            self._populate_line_table(section["lines"])
+        if not show_motion_toggle:
+            self._motion_toggle.setChecked(False)
+
         if not section:
             self._chart.clear()
             self._chart.set_title(f"{QC_LABELS.get(qc_id, qc_id)} -- 데이터 없음")
             return
 
+        # ── Render chart ──
         try:
             if qc_id == "file":
                 self._chart.render_file_summary(section)
@@ -380,15 +514,19 @@ class AnalysisPanel(QWidget):
             elif qc_id == "offset":
                 self._chart.render_offset(section)
             elif qc_id == "motion":
-                self._chart.render_motion(section)
+                if self._motion_toggle.isChecked() and section.get("per_line"):
+                    self._chart.render_motion_perline(section)
+                else:
+                    self._chart.render_motion(section)
             elif qc_id == "svp":
                 self._chart.render_svp(section)
             elif qc_id == "coverage":
-                self._chart.render_coverage(section)
+                selected = self._line_filter.currentText()
+                sel = None if selected in ("전체 라인", "") else selected
+                self._chart.render_coverage(section, selected_line=sel)
             elif qc_id == "crossline":
                 self._chart.render_crossline(section)
             else:
-                # Default: radar chart
                 scores = self._build_score_map()
                 if scores:
                     self._chart.render_radar(scores)
@@ -398,6 +536,87 @@ class AnalysisPanel(QWidget):
         except Exception as e:
             self._chart.clear()
             self._chart.set_title(f"렌더링 오류: {str(e)[:100]}")
+
+    def _update_detail_panel(self, qc_id: str, section: dict):
+        """Populate detail items table for the selected module."""
+        items = section.get("items", [])
+        # Also include offset_validation checks
+        if qc_id == "offset":
+            ov = self._result_data.get("offset_validation", {})
+            for c in ov.get("config_checks", []):
+                items.append({"status": c.get("status", "N/A"),
+                              "name": f"{c.get('sensor', '')} {c.get('field', '')}",
+                              "detail": f"PDS={c.get('pds_value', '')} OM={c.get('om_value', '')}"})
+            for c in ov.get("data_checks", []):
+                items.append(c)
+        # Crossline intersection details
+        if qc_id == "crossline":
+            for det in section.get("intersection_details", []):
+                items.append({
+                    "status": "INFO",
+                    "name": f"Line {det.get('line1', '?')} × {det.get('line2', '?')}",
+                    "detail": f"cells={det.get('n_cells', 0)} mean={det.get('mean_diff', 0):.3f}m std={det.get('std_diff', 0):.3f}m",
+                })
+
+        if not items:
+            self._detail_frame.setVisible(False)
+            return
+
+        self._detail_frame.setVisible(True)
+        self._detail_title.setText(f"{QC_LABELS.get(qc_id, qc_id)} 상세")
+        self._detail_table.setRowCount(len(items))
+        for i, item in enumerate(items):
+            status = item.get("status", "N/A")
+            color = _color_for_status(status)
+            icon = STATUS_ICONS.get(status, "")
+            s_item = QTableWidgetItem(f"{icon} {status}" if icon else status)
+            s_item.setForeground(Qt.GlobalColor.white)
+            s_item.setBackground(Qt.GlobalColor.transparent)
+            self._detail_table.setItem(i, 0, s_item)
+            self._detail_table.setItem(i, 1, QTableWidgetItem(item.get("name", "")))
+            self._detail_table.setItem(i, 2, QTableWidgetItem(item.get("detail", "")))
+
+    def _populate_line_table(self, lines: list[dict]):
+        """Fill line summary table from coverage data."""
+        self._line_filter.blockSignals(True)
+        self._line_filter.clear()
+        self._line_filter.addItem("전체 라인")
+        self._line_table.setRowCount(len(lines))
+        for i, ln in enumerate(lines):
+            name = ln.get("name", f"Line {i+1}")
+            self._line_filter.addItem(name)
+            self._line_table.setItem(i, 0, QTableWidgetItem(name))
+            self._line_table.setItem(i, 1, QTableWidgetItem(f"{ln.get('heading_deg', 0):.1f}"))
+            self._line_table.setItem(i, 2, QTableWidgetItem(f"{ln.get('length_m', 0):.0f}"))
+            self._line_table.setItem(i, 3, QTableWidgetItem(f"{ln.get('mean_depth_m', 0):.1f}"))
+            self._line_table.setItem(i, 4, QTableWidgetItem(f"{ln.get('mean_swath_m', 0):.0f}"))
+            self._line_table.setItem(i, 5, QTableWidgetItem(str(ln.get("num_pings", 0))))
+        self._line_filter.blockSignals(False)
+
+    def _on_line_filter_changed(self, idx: int):
+        """Re-render coverage chart with selected line highlight."""
+        section = self._result_data.get("coverage", {})
+        if not section:
+            return
+        selected = self._line_filter.currentText()
+        sel = None if selected in ("전체 라인", "") else selected
+        try:
+            self._chart.render_coverage(section, selected_line=sel)
+        except Exception:
+            pass
+
+    def _on_motion_toggle(self, checked: bool):
+        """Toggle between overall and per-line motion chart."""
+        section = self._result_data.get("motion", {})
+        if not section:
+            return
+        try:
+            if checked and section.get("per_line"):
+                self._chart.render_motion_perline(section)
+            else:
+                self._chart.render_motion(section)
+        except Exception:
+            pass
 
     def _build_score_map(self) -> dict[str, float]:
         """Build score map from all module verdicts for radar chart."""
@@ -424,7 +643,15 @@ class AnalysisPanel(QWidget):
 
         self._run_btn.setEnabled(False)
         self._progress_label.setVisible(True)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setValue(0)
+        self._cancel_btn.setVisible(True)
         self._progress_label.setText("QC 파이프라인 실행 중...")
+        self._progress_label.setStyleSheet(f"""
+            font-size: {Font.XS}px;
+            color: {Dark.CYAN};
+            background: transparent;
+        """)
 
         # Create result record (project-level, not per-file)
         result_id = DataService.create_qc_result(self._file_id, self._project_id)
@@ -448,6 +675,7 @@ class AnalysisPanel(QWidget):
 
         self._thread.started.connect(self._worker.run)
         self._worker.stage.connect(self._on_stage)
+        self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_qc_done)
         self._worker.error.connect(self._on_qc_error)
         self._worker.finished.connect(self._thread.quit)
@@ -456,11 +684,25 @@ class AnalysisPanel(QWidget):
         self._thread.start()
 
     def _on_stage(self, num: int, name: str):
-        self._progress_label.setText(f"Stage {num}: {name}")
+        self._progress_label.setText(name)
+
+    def _on_progress(self, current: int, total: int):
+        self._progress_bar.setRange(0, total)
+        self._progress_bar.setValue(current)
+
+    def _cancel_qc(self):
+        if self._worker:
+            self._worker.cancel()
+        self._run_btn.setEnabled(True)
+        self._progress_label.setText("QC 취소됨")
+        self._progress_bar.setVisible(False)
+        self._cancel_btn.setVisible(False)
 
     def _on_qc_done(self, result_id: int, data: dict):
         self._run_btn.setEnabled(True)
         self._progress_label.setVisible(False)
+        self._progress_bar.setVisible(False)
+        self._cancel_btn.setVisible(False)
         self._result_data = data
 
         score, grade = compute_score(data)
@@ -469,6 +711,8 @@ class AnalysisPanel(QWidget):
 
     def _on_qc_error(self, result_id: int, msg: str):
         self._run_btn.setEnabled(True)
+        self._progress_bar.setVisible(False)
+        self._cancel_btn.setVisible(False)
         self._progress_label.setText(f"QC 오류: {msg[:100]}")
         self._progress_label.setStyleSheet(f"""
             font-size: {Font.XS}px;

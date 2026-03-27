@@ -99,6 +99,11 @@ class ToastManager:
         return cls._instance
 
     def show_toast(self, message: str, level: str = "info"):
+        # Limit to 3 visible toasts
+        while len(self._toasts) >= 3:
+            oldest = self._toasts.pop(0)
+            oldest._fade_out()
+
         toast = ToastWidget(message, level, self._parent)
         self._toasts.append(toast)
         toast.destroyed.connect(
