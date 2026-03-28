@@ -1,4 +1,4 @@
-"""MBESQC QCUnlockGrid -- 8-module QC availability grid based on available file types."""
+"""MBESQC QCUnlockGrid -- 9-module QC availability grid based on available file types."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from geoview_pyside6.constants import Dark, Font, Space, Radius
 
 # QC module definitions: (id, name, description, requirements)
 QC_MODULES = [
+    ("preprocess", "Pre-Processing", "처리 전 설정/항법/메타데이터 게이트", ["pds"]),
     ("file",      "File QC",      "파일 무결성/네이밍/시간 연속성",     ["pds"]),
     ("vessel",    "Vessel QC",    "PDS vs HVF 오프셋 비교",            ["pds"]),
     ("offset",    "Offset QC",    "Roll/Pitch bias 추정",              ["gsf"]),
@@ -109,7 +110,7 @@ class _QCModuleCard(QFrame):
 
 
 class QCUnlockGrid(QFrame):
-    """8-module QC availability grid. Updates based on file availability."""
+    """9-module QC availability grid. Updates based on file availability."""
 
     def __init__(self, parent=None):
         super().__init__(parent)

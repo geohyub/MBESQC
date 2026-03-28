@@ -13,6 +13,7 @@ If mismatches are found, suggests the correct values.
 
 from __future__ import annotations
 
+import sys
 import sqlite3
 import warnings
 from dataclasses import dataclass, field
@@ -557,13 +558,18 @@ def validate_preprocess(
 
 def print_validation_report(result: PreProcessResult) -> None:
     """Print validation result to console."""
-    print(f"\n{'='*70}")
-    print(f"PRE-PROCESSING VALIDATION REPORT")
-    print(f"{'='*70}")
-    print(f"File: {result.filepath}")
-    print(f"Vessel: {result.vessel_name}")
-    print(f"Result: {result.summary()}")
-    print(f"{'='*70}\n")
+    def _safe_print(text: str = ""):
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        safe = str(text).encode(encoding, errors="replace").decode(encoding, errors="replace")
+        print(safe)
+
+    _safe_print(f"\n{'='*70}")
+    _safe_print("PRE-PROCESSING VALIDATION REPORT")
+    _safe_print(f"{'='*70}")
+    _safe_print(f"File: {result.filepath}")
+    _safe_print(f"Vessel: {result.vessel_name}")
+    _safe_print(f"Result: {result.summary()}")
+    _safe_print(f"{'='*70}\n")
 
     categories = {}
     for c in result.checks:
@@ -572,16 +578,16 @@ def print_validation_report(result: PreProcessResult) -> None:
     status_icons = {"PASS": "[OK]", "WARNING": "[!!]", "FAIL": "[XX]", "INFO": "[--]", "N/A": "[  ]"}
 
     for cat, items in categories.items():
-        print(f"--- {cat} ---")
+        _safe_print(f"--- {cat} ---")
         for item in items:
             icon = status_icons.get(item.status, "[??]")
-            print(f"  {icon} {item.name}")
+            _safe_print(f"  {icon} {item.name}")
             if item.pds_value:
-                print(f"       PDS: {item.pds_value}")
+                _safe_print(f"       PDS: {item.pds_value}")
             if item.reference_value:
-                print(f"       Ref: {item.reference_value}")
+                _safe_print(f"       Ref: {item.reference_value}")
             if item.difference:
-                print(f"       Diff: {item.difference}")
+                _safe_print(f"       Diff: {item.difference}")
             if item.suggestion:
-                print(f"       >>> {item.suggestion}")
-        print()
+                _safe_print(f"       >>> {item.suggestion}")
+        _safe_print()

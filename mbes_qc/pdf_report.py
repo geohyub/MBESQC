@@ -51,6 +51,23 @@ STATUS_COLORS = {
 }
 
 
+def _sanitize_report_text(text: str | None, max_lines: int = 4, max_chars: int = 320) -> str:
+    value = str(text or "").replace("\r", "")
+    for old, new in (("°", " deg"), ("±", "+/-"), ("→", "->"), ("—", "-"), ("–", "-")):
+        value = value.replace(old, new)
+    lines = [" ".join(line.strip().split()) for line in value.split("\n") if line.strip()]
+    if not lines:
+        return ""
+    extra = max(0, len(lines) - max_lines)
+    lines = lines[:max_lines]
+    compact = " / ".join(lines)
+    if extra:
+        compact += f" / ... {extra} more lines"
+    if len(compact) > max_chars:
+        compact = compact[: max_chars - 3].rstrip() + "..."
+    return compact
+
+
 # ── Page Template (header/footer) ────────────────────────────
 
 def _header_footer(canvas, doc):
@@ -181,7 +198,20 @@ def _make_table(headers: list[str], rows: list[list], col_widths=None, styles=No
 def _verdict_text(result) -> str:
     """Extract overall verdict from a QC result object."""
     if hasattr(result, "overall_verdict"):
-        return result.overall_verdict
+        verdict = result.overall_verdict
+        return verdict() if callable(verdict) else verdict
+    if hasattr(result, "overall"):
+        return result.overall
+    if hasattr(result, "verdict"):
+        return result.verdict
+    items = _get_items(result)
+    statuses = [str(item.get("status", "N/A")).upper() for item in items]
+    if "FAIL" in statuses:
+        return "FAIL"
+    if "WARNING" in statuses:
+        return "WARNING"
+    if any(status not in ("", "N/A", "INFO") for status in statuses):
+        return "PASS"
     return "N/A"
 
 
@@ -194,6 +224,75 @@ def _get_items(result) -> list[dict]:
                 items.append(i)
             elif hasattr(i, "name"):
                 items.append({"name": i.name, "status": i.status, "detail": i.detail})
+    elif hasattr(result, "checks"):
+        for i in result.checks:
+            detail_parts = []
+            if getattr(i, "pds_value", ""):
+                detail_parts.append(f"PDS={getattr(i, 'pds_value', '')}")
+            if getattr(i, "reference_value", ""):
+                detail_parts.append(f"Ref={getattr(i, 'reference_value', '')}")
+            if getattr(i, "difference", ""):
+                detail_parts.append(f"Diff={getattr(i, 'difference', '')}")
+            if getattr(i, "suggestion", ""):
+                detail_parts.append(f"Action={getattr(i, 'suggestion', '')}")
+            items.append({
+                "name": f"{getattr(i, 'category', '')} / {getattr(i, 'name', '')}".strip(" /"),
+                "status": getattr(i, "status", "N/A"),
+                "detail": " | ".join(detail_parts),
+            })
+    elif hasattr(result, "roll_bias_deg") or hasattr(result, "pitch_bias_deg"):
+        items.append({
+            "name": "Roll Bias",
+            "status": getattr(result, "roll_verdict", "N/A"),
+            "detail": (
+                f"{getattr(result, 'roll_bias_deg', 0.0):+.4f} deg +/- "
+                f"{getattr(result, 'roll_bias_std', 0.0):.4f} deg "
+                f"({getattr(result, 'roll_num_pings', 0)} pings)"
+            ),
+        })
+        items.append({
+            "name": "Pitch Bias",
+            "status": getattr(result, "pitch_verdict", "N/A"),
+            "detail": (
+                f"{getattr(result, 'pitch_bias_deg', 0.0):+.4f} deg +/- "
+                f"{getattr(result, 'pitch_bias_std', 0.0):.4f} deg "
+                f"({getattr(result, 'pitch_num_pairs', 0)} pairs)"
+            ),
+        })
+        hvf_vs_data = getattr(result, "hvf_vs_data", "")
+        if hvf_vs_data:
+            items.append({
+                "name": "HVF vs Data",
+                "status": _verdict_text(result),
+                "detail": hvf_vs_data,
+            })
+    elif hasattr(result, "gap_verdict") or hasattr(result, "roll"):
+        for axis_name in ("roll", "pitch", "heave", "heading"):
+            axis = getattr(result, axis_name, None)
+            if not axis:
+                continue
+            items.append({
+                "name": getattr(axis, "name", axis_name.title()),
+                "status": getattr(axis, "verdict", "N/A"),
+                "detail": (
+                    f"mean={getattr(axis, 'mean', 0.0):+.4f}{getattr(axis, 'unit', '')}, "
+                    f"std={getattr(axis, 'std', 0.0):.4f}{getattr(axis, 'unit', '')}, "
+                    f"spikes={getattr(axis, 'num_spikes', 0)} "
+                    f"({getattr(axis, 'spike_rate_pct', 0.0):.2f}%)"
+                ),
+            })
+        items.append({
+            "name": "Gap Analysis",
+            "status": getattr(result, "gap_verdict", "N/A"),
+            "detail": (
+                f"{getattr(result, 'num_gaps', 0)} gaps, "
+                f"max {getattr(result, 'max_gap_sec', 0.0):.3f}s, "
+                f"sample rate {getattr(result, 'sample_rate_hz', 0.0):.1f}Hz"
+            ),
+        })
+    for item in items:
+        item["name"] = _sanitize_report_text(item.get("name", ""), max_lines=1, max_chars=96)
+        item["detail"] = _sanitize_report_text(item.get("detail", ""))
     return items
 
 

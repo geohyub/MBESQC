@@ -113,6 +113,17 @@ def run_full_qc(
             return True
         return False
 
+    def _resolve_hvf_path(raw_path: str | Path | None) -> str | None:
+        if not raw_path:
+            return None
+        candidate = Path(raw_path)
+        if candidate.is_file() and candidate.suffix.lower() == ".hvf":
+            return str(candidate)
+        if candidate.is_dir():
+            hvf_files = sorted(candidate.glob("*.hvf")) + sorted(candidate.glob("*.HVF"))
+            return str(hvf_files[0]) if hvf_files else None
+        return None
+
     # Resolve GSF file list
     gsf_file_list = []
     if gsf_dir:
@@ -128,6 +139,8 @@ def run_full_qc(
         pds_file_list = sorted(Path(pds_dir).glob("*.pds"))
     elif pds_path:
         pds_file_list = [Path(pds_path)]
+
+    hvf_file = _resolve_hvf_path(hvf_path)
 
     # ── 0. Pre-Processing Check ─────────────────────────────
     _notify(0, "전처리 검증...")
@@ -162,7 +175,7 @@ def run_full_qc(
         return result
     if pds_file_list:
         _header("B. Vessel/Offset Config QC")
-        result.vessel_qc = run_vessel_qc(pds_file_list[0], hvf_path)
+        result.vessel_qc = run_vessel_qc(pds_file_list[0], hvf_file)
         _print_items(result.vessel_qc.items)
 
     # ── Load GSF data ───────────────────────────────────────
@@ -201,7 +214,7 @@ def run_full_qc(
     if _stopped():
         return result
     _header("C. Offset Verification")
-    hvf = read_hvf(hvf_path) if hvf_path else None
+    hvf = read_hvf(hvf_file) if hvf_file else None
     result.offset_qc = run_offset_qc(gsf_main, hvf)
     _print_offset(result.offset_qc)
 
@@ -338,7 +351,7 @@ def run_full_qc(
             ppt_path,
             pds_meta=pds_meta,
             gsf_main=gsf_main,
-            hvf=read_hvf(hvf_path) if hvf_path else None,
+            hvf=read_hvf(hvf_file) if hvf_file else None,
             surface_dir=out / "surfaces" if out else None,
             total_line_km=total_km,
             qc_results=qc_dict,
@@ -361,6 +374,27 @@ def _vc(v: str) -> str:
     return f"{c}{v}\033[0m"
 
 
+def _console_text(text: str | None, max_lines: int = 4, max_chars: int = 280) -> str:
+    value = str(text or "").replace("\r", "")
+    for old, new in (("°", " deg"), ("±", "+/-"), ("→", "->"), ("—", "-"), ("–", "-")):
+        value = value.replace(old, new)
+    lines = [" ".join(line.strip().split()) for line in value.split("\n") if line.strip()]
+    if not lines:
+        return ""
+    extra = max(0, len(lines) - max_lines)
+    lines = lines[:max_lines]
+    compact = " / ".join(lines)
+    if extra:
+        compact += f" / ... {extra} more lines"
+    if len(compact) > max_chars:
+        compact = compact[: max_chars - 3].rstrip() + "..."
+    return compact
+
+
+def _unit_text(unit: str) -> str:
+    return "deg" if unit == "°" else unit
+
+
 def _print_items(items) -> None:
     for i in items:
         s = getattr(i, "status", "N/A")
@@ -380,14 +414,19 @@ def _print_offset(r: OffsetQcResult) -> None:
     print(f"  Pitch Bias: {r.pitch_bias_deg:+.4f} +/- {r.pitch_bias_std:.4f} deg "
           f"({r.pitch_num_pairs} pairs)  [{_vc(r.pitch_verdict)}]")
     if r.hvf_offsets:
-        for off in r.hvf_offsets:
+        preview = r.hvf_offsets[:3]
+        for off in preview:
             print(f"  HVF: {off['name']}: R={off['roll']:+.3f} P={off['pitch']:+.3f} H={off['heading']:+.3f}")
+        if len(r.hvf_offsets) > len(preview):
+            print(f"  HVF: ... {len(r.hvf_offsets) - len(preview)} more offset records")
+    if r.hvf_vs_data:
+        print(f"  HVF vs Data: {_console_text(r.hvf_vs_data)}")
 
 
 def _print_motion(r: MotionQcResult) -> None:
     print(f"  Samples: {r.total_samples:,} ({r.time_span_sec:.0f}s, {r.sample_rate_hz:.1f}Hz)")
     for ax in [r.roll, r.pitch, r.heave, r.heading]:
-        print(f"  {ax.name:>8s}: mean={ax.mean:+8.4f}{ax.unit} std={ax.std:7.4f} "
+        print(f"  {ax.name:>8s}: mean={ax.mean:+8.4f}{_unit_text(ax.unit)} std={ax.std:7.4f} "
               f"spk={ax.num_spikes}({ax.spike_rate_pct:.2f}%) [{_vc(ax.verdict)}]")
     print(f"  Gaps: {r.num_gaps} (max {r.max_gap_sec:.3f}s) [{_vc(r.gap_verdict)}]")
 

@@ -42,3 +42,8 @@ reference/**/*.log
 !static/*.png
 qc_output*/
 reference/EDF_trackplot*.png
+*.db-shm
+*.db-wal
+*.db
+reference/
+__pycache__/

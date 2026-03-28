@@ -151,7 +151,7 @@ class MBESQCApp(GeoViewApp):
         self._switch_to("analysis")
         file_info = DataService.get_file(file_id)
         if file_info:
-            self.top_bar.set_title(f"\ubd84\uc11d \u2014 {file_info['filename']}")
+            self.top_bar.set_title(f"\ud504\ub85c\uc81d\ud2b8 QC \u2014 {file_info['filename']}")
 
     def _on_navigate_to_new_project(self):
         self._form.clear_form()
@@ -234,6 +234,14 @@ class MBESQCApp(GeoViewApp):
 
     def _export_project(self, project_id: int, fmt: str):
         """Export project report."""
+        latest_result = DataService.get_latest_project_result(project_id)
+        if not latest_result:
+            self.controller.show_toast(
+                "\uc644\ub8cc\ub41c QC \uc2a4\ub0c5\uc0f7\uc774 \uc5c6\uc5b4 export\ub97c \ub9cc\ub4e4 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4",
+                "warning",
+            )
+            return
+
         ext_map = {"excel": ".xlsx", "word": ".docx", "ppt": ".pptx"}
         ext = ext_map.get(fmt, ".xlsx")
         filter_map = {
@@ -322,7 +330,7 @@ class MBESQCApp(GeoViewApp):
                     lambda p=pid: self._switch_to("dashboard"))
                 self.top_bar.add_action_button("Upload",
                     lambda p=pid: self.controller.navigate_upload.emit(p))
-                self.top_bar.add_action_button("Batch QC",
+                self.top_bar.add_action_button("\ud504\ub85c\uc81d\ud2b8 QC",
                     lambda: self._project_detail.run_batch_qc())
                 self.top_bar.add_action_button("Export",
                     lambda p=pid: self._show_export_menu(p))

@@ -46,6 +46,7 @@ def _sf(v) -> float:
 # ── QC Weights & Scoring ──
 
 QC_WEIGHTS = {
+    "preprocess": 10,
     "file": 5, "vessel": 10, "offset": 15, "motion": 15,
     "svp": 10, "coverage": 15, "crossline": 20, "surface": 10,
 }
@@ -117,6 +118,34 @@ def _items_verdict(items) -> str:
 def serialize_full_qc_result(result) -> dict:
     """Convert FullQcResult → JSON-serializable dict for DB storage."""
     d = {"elapsed_sec": _sf(getattr(result, "elapsed_sec", 0))}
+
+    pp = getattr(result, "preprocess", None)
+    if pp:
+        items = []
+        for it in getattr(pp, "checks", []):
+            detail_parts = []
+            if getattr(it, "pds_value", ""):
+                detail_parts.append(f"PDS={getattr(it, 'pds_value', '')}")
+            if getattr(it, "reference_value", ""):
+                detail_parts.append(f"Ref={getattr(it, 'reference_value', '')}")
+            if getattr(it, "difference", ""):
+                detail_parts.append(f"Diff={getattr(it, 'difference', '')}")
+            if getattr(it, "suggestion", ""):
+                detail_parts.append(f"Action={getattr(it, 'suggestion', '')}")
+            items.append({
+                "name": f"{getattr(it, 'category', '')} / {getattr(it, 'name', '')}".strip(" /"),
+                "status": getattr(it, "status", "N/A"),
+                "detail": " | ".join(detail_parts),
+            })
+        d["preprocess"] = {
+            "overall": getattr(pp, "overall", "N/A"),
+            "verdict": getattr(pp, "overall", "N/A"),
+            "summary": pp.summary() if hasattr(pp, "summary") else "",
+            "num_pass": int(getattr(pp, "num_pass", 0)),
+            "num_warn": int(getattr(pp, "num_warn", 0)),
+            "num_fail": int(getattr(pp, "num_fail", 0)),
+            "items": items,
+        }
 
     # File QC
     fq = getattr(result, "file_qc", None)
@@ -351,7 +380,21 @@ def serialize_full_qc_result(result) -> dict:
 
 
 def _downsample(arr, max_pts: int = 2000) -> np.ndarray:
-    arr = np.asarray(arr)
+    if isinstance(arr, (list, tuple)) and arr:
+        first = arr[0]
+        if isinstance(first, (list, tuple, np.ndarray)):
+            parts = []
+            for part in arr:
+                if part is None:
+                    continue
+                part_arr = np.asarray(part).ravel()
+                if part_arr.size:
+                    parts.append(part_arr)
+            arr = np.concatenate(parts) if parts else np.asarray([])
+        else:
+            arr = np.asarray(arr).ravel()
+    else:
+        arr = np.asarray(arr).ravel()
     if len(arr) <= max_pts:
         return arr
     idx = np.linspace(0, len(arr) - 1, max_pts, dtype=int)
@@ -435,6 +478,13 @@ class AnalysisWorker(QObject):
             mbesqc_root = str(Path(__file__).resolve().parents[2])
             if mbesqc_root not in sys.path:
                 sys.path.insert(0, mbesqc_root)
+            for stream in (sys.stdout, sys.stderr):
+                reconfigure = getattr(stream, "reconfigure", None)
+                if callable(reconfigure):
+                    try:
+                        reconfigure(errors="replace")
+                    except Exception:
+                        pass
 
             self.stage.emit(1, "QC 엔진 로딩...")
             from mbes_qc.runner import run_full_qc

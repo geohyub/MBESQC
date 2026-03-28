@@ -6,6 +6,7 @@ Generates QC reports in multiple formats from QC analysis results.
 from __future__ import annotations
 
 import datetime
+import sys
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -46,6 +47,141 @@ _GRAY = "808080"
 
 def _status_color(status: str) -> str:
     return {"PASS": _GREEN, "FAIL": _RED, "WARNING": _YELLOW}.get(status, _GRAY)
+
+
+def _safe_print(*args, **kwargs) -> None:
+    """Print using the active console encoding without crashing on cp949."""
+    sep = kwargs.get("sep", " ")
+    end = kwargs.get("end", "\n")
+    text = sep.join(str(arg) for arg in args) + end
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    safe = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+    sys.stdout.write(safe)
+
+
+def _sanitize_report_text(text: str | None, max_lines: int = 4, max_chars: int = 320) -> str:
+    value = str(text or "").replace("\r", "")
+    for old, new in (("°", " deg"), ("±", "+/-"), ("→", "->"), ("—", "-"), ("–", "-")):
+        value = value.replace(old, new)
+    lines = [" ".join(line.strip().split()) for line in value.split("\n") if line.strip()]
+    if not lines:
+        return ""
+    extra = max(0, len(lines) - max_lines)
+    lines = lines[:max_lines]
+    compact = " / ".join(lines)
+    if extra:
+        compact += f" / ... {extra} more lines"
+    if len(compact) > max_chars:
+        compact = compact[: max_chars - 3].rstrip() + "..."
+    return compact
+
+
+def _extract_items(result) -> list[dict]:
+    items = []
+    if hasattr(result, "items"):
+        raw_items = result.items if isinstance(result.items, list) else []
+        for item in raw_items:
+            if isinstance(item, dict):
+                items.append(item)
+            elif hasattr(item, "name"):
+                items.append({
+                    "name": getattr(item, "name", ""),
+                    "status": getattr(item, "status", "N/A"),
+                    "detail": getattr(item, "detail", ""),
+                })
+    elif hasattr(result, "checks"):
+        for item in getattr(result, "checks", []):
+            detail_parts = []
+            if getattr(item, "pds_value", ""):
+                detail_parts.append(f"PDS={getattr(item, 'pds_value', '')}")
+            if getattr(item, "reference_value", ""):
+                detail_parts.append(f"Ref={getattr(item, 'reference_value', '')}")
+            if getattr(item, "difference", ""):
+                detail_parts.append(f"Diff={getattr(item, 'difference', '')}")
+            if getattr(item, "suggestion", ""):
+                detail_parts.append(f"Action={getattr(item, 'suggestion', '')}")
+            items.append({
+                "name": f"{getattr(item, 'category', '')} / {getattr(item, 'name', '')}".strip(" /"),
+                "status": getattr(item, "status", "N/A"),
+                "detail": " | ".join(detail_parts),
+            })
+    elif hasattr(result, "roll_bias_deg") or hasattr(result, "pitch_bias_deg"):
+        items.append({
+            "name": "Roll Bias",
+            "status": getattr(result, "roll_verdict", "N/A"),
+            "detail": (
+                f"{getattr(result, 'roll_bias_deg', 0.0):+.4f} deg +/- "
+                f"{getattr(result, 'roll_bias_std', 0.0):.4f} deg "
+                f"({getattr(result, 'roll_num_pings', 0)} pings)"
+            ),
+        })
+        items.append({
+            "name": "Pitch Bias",
+            "status": getattr(result, "pitch_verdict", "N/A"),
+            "detail": (
+                f"{getattr(result, 'pitch_bias_deg', 0.0):+.4f} deg +/- "
+                f"{getattr(result, 'pitch_bias_std', 0.0):.4f} deg "
+                f"({getattr(result, 'pitch_num_pairs', 0)} pairs)"
+            ),
+        })
+        hvf_vs_data = getattr(result, "hvf_vs_data", "")
+        if hvf_vs_data:
+            items.append({
+                "name": "HVF vs Data",
+                "status": _extract_verdict(result),
+                "detail": hvf_vs_data,
+            })
+    elif hasattr(result, "gap_verdict") or hasattr(result, "roll"):
+        for axis_name in ("roll", "pitch", "heave", "heading"):
+            axis = getattr(result, axis_name, None)
+            if not axis:
+                continue
+            items.append({
+                "name": getattr(axis, "name", axis_name.title()),
+                "status": getattr(axis, "verdict", "N/A"),
+                "detail": (
+                    f"mean={getattr(axis, 'mean', 0.0):+.4f}{getattr(axis, 'unit', '')}, "
+                    f"std={getattr(axis, 'std', 0.0):.4f}{getattr(axis, 'unit', '')}, "
+                    f"spikes={getattr(axis, 'num_spikes', 0)} "
+                    f"({getattr(axis, 'spike_rate_pct', 0.0):.2f}%)"
+                ),
+            })
+        items.append({
+            "name": "Gap Analysis",
+            "status": getattr(result, "gap_verdict", "N/A"),
+            "detail": (
+                f"{getattr(result, 'num_gaps', 0)} gaps, "
+                f"max {getattr(result, 'max_gap_sec', 0.0):.3f}s, "
+                f"sample rate {getattr(result, 'sample_rate_hz', 0.0):.1f}Hz"
+            ),
+        })
+    for item in items:
+        item["name"] = _sanitize_report_text(item.get("name", ""), max_lines=1, max_chars=96)
+        item["detail"] = _sanitize_report_text(item.get("detail", ""))
+    return items
+
+
+def _extract_verdict(result) -> str:
+    if hasattr(result, "overall_verdict"):
+        verdict = getattr(result, "overall_verdict")
+        if callable(verdict):
+            verdict = verdict()
+        return str(verdict or "N/A")
+    if hasattr(result, "overall"):
+        return str(getattr(result, "overall") or "N/A")
+    if hasattr(result, "verdict"):
+        return str(getattr(result, "verdict") or "N/A")
+
+    statuses = []
+    for item in _extract_items(result):
+        status = str(item.get("status", "N/A")).upper()
+        if status not in ("", "N/A", "INFO"):
+            statuses.append(status)
+    if "FAIL" in statuses:
+        return "FAIL"
+    if "WARNING" in statuses:
+        return "WARNING"
+    return "PASS" if statuses else "N/A"
 
 
 # ── Excel Report ────────────────────────────────────────────────
@@ -165,20 +301,7 @@ def generate_excel_report(
     summary_rows = []
     overall = "PASS"
     for category, result in qc_results.items():
-        verdict = "N/A"
-        if hasattr(result, "overall_verdict"):
-            verdict = result.overall_verdict
-        elif hasattr(result, "items"):
-            vs = []
-            for i in (result.items if isinstance(result.items, list) else []):
-                s = i.get("status", "N/A") if isinstance(i, dict) else getattr(i, "status", "N/A")
-                vs.append(s)
-            if "FAIL" in vs:
-                verdict = "FAIL"
-            elif "WARNING" in vs:
-                verdict = "WARNING"
-            elif vs:
-                verdict = "PASS"
+        verdict = _extract_verdict(result)
 
         summary_rows.append([category, verdict])
         if verdict == "FAIL":
@@ -216,14 +339,10 @@ def generate_excel_report(
 
     # ── Detail sheets per category ──
     for category, result in qc_results.items():
-        items = []
-        if hasattr(result, "items"):
-            raw_items = result.items
-            for i in raw_items:
-                if isinstance(i, dict):
-                    items.append([i.get("name", ""), i.get("status", ""), i.get("detail", "")])
-                elif hasattr(i, "name"):
-                    items.append([i.name, i.status, i.detail])
+        items = [
+            [item.get("name", ""), item.get("status", ""), item.get("detail", "")]
+            for item in _extract_items(result)
+        ]
 
         if items:
             safe_name = category[:31].replace("/", "-").replace("\\", "-")
@@ -282,20 +401,7 @@ def generate_word_report(
     summary_rows = []
     overall = "PASS"
     for category, result in qc_results.items():
-        verdict = "N/A"
-        if hasattr(result, "overall_verdict"):
-            verdict = result.overall_verdict
-        elif hasattr(result, "items"):
-            vs = []
-            for i in (result.items if isinstance(result.items, list) else []):
-                s = i.get("status", "N/A") if isinstance(i, dict) else getattr(i, "status", "N/A")
-                vs.append(s)
-            if "FAIL" in vs:
-                verdict = "FAIL"
-            elif "WARNING" in vs:
-                verdict = "WARNING"
-            elif vs:
-                verdict = "PASS"
+        verdict = _extract_verdict(result)
 
         summary_rows.append([category, verdict])
         if verdict == "FAIL":
@@ -316,12 +422,7 @@ def generate_word_report(
         wb.heading(category, level=2)
 
         items = []
-        if hasattr(result, "items"):
-            for i in result.items:
-                if isinstance(i, dict):
-                    items.append(i)
-                elif hasattr(i, "name"):
-                    items.append({"name": i.name, "status": i.status, "detail": i.detail})
+        items = _extract_items(result)
 
         if items:
             detail_rows = []
@@ -373,35 +474,25 @@ def print_terminal_report(qc_results: dict) -> None:
         c = {"PASS": "\033[92m", "WARNING": "\033[93m", "FAIL": "\033[91m"}.get(v, "")
         return f"{c}{v}\033[0m"
 
-    print("\n" + "=" * 70)
-    print("  MBES QC REPORT")
-    print("=" * 70)
+    _safe_print("\n" + "=" * 70)
+    _safe_print("  MBES QC REPORT")
+    _safe_print("=" * 70)
 
     overall = "PASS"
     for category, result in qc_results.items():
-        verdict = "N/A"
-        if hasattr(result, "overall_verdict"):
-            verdict = result.overall_verdict
+        verdict = _extract_verdict(result)
 
-        print(f"\n  [{_vc(verdict)}] {category}")
+        _safe_print(f"\n  [{_vc(verdict)}] {category}")
 
-        items = []
-        if hasattr(result, "items"):
-            for i in result.items:
-                if isinstance(i, dict):
-                    items.append(i)
-                elif hasattr(i, "name"):
-                    items.append({"name": i.name, "status": i.status, "detail": i.detail})
-
-        for item in items:
+        for item in _extract_items(result):
             s = item.get("status", "N/A")
-            print(f"      {_vc(s):>20s}  {item.get('name', '')}: {item.get('detail', '')}")
+            _safe_print(f"      {_vc(s):>20s}  {item.get('name', '')}: {item.get('detail', '')}")
 
         if verdict == "FAIL":
             overall = "FAIL"
         elif verdict == "WARNING" and overall == "PASS":
             overall = "WARNING"
 
-    print("\n" + "=" * 70)
-    print(f"  OVERALL: {_vc(overall)}")
-    print("=" * 70 + "\n")
+    _safe_print("\n" + "=" * 70)
+    _safe_print(f"  OVERALL: {_vc(overall)}")
+    _safe_print("=" * 70 + "\n")
