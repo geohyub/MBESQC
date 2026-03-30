@@ -111,6 +111,22 @@ class MBESQCApp(GeoViewApp):
         self._form.saved.connect(self._on_project_saved)
         self._form.cancelled.connect(self._on_form_cancelled)
 
+    # ── Project Context Integration ──
+
+    def on_project_context_changed(self, ctx, old_ctx=None):
+        """공유 프로젝트 컨텍스트 변경 시 vessel_config_id + raw_data 힌트."""
+        if ctx is None:
+            return
+        parts = []
+        if ctx.vessel_config_id is not None:
+            parts.append(f"OM Config: #{ctx.vessel_config_id}")
+        if ctx.vessel:
+            parts.append(f"Vessel: {ctx.vessel}")
+        if ctx.paths and ctx.paths.raw_data:
+            parts.append(f"Raw: {ctx.paths.raw_data}")
+        if parts:
+            self.status_bar.showMessage(" | ".join(parts), 5000)
+
     def _connect_navigation(self):
         """Wire controller signals to panel switching."""
         self.controller.navigate_dashboard.connect(
