@@ -11,10 +11,10 @@ from geoview_pyside6.constants import Dark, Font, Space, Radius
 
 
 _TOAST_COLORS = {
-    "success": ("#10B981", "rgba(16,185,129,0.12)"),
-    "warning": ("#F59E0B", "rgba(245,158,11,0.12)"),
-    "error":   ("#EF4444", "rgba(239,68,68,0.12)"),
-    "info":    ("#3B82F6", "rgba(59,130,246,0.12)"),
+    "success": (Dark.GREEN, f"rgba(16,185,129,0.12)"),
+    "warning": (Dark.ORANGE, f"rgba(245,158,11,0.12)"),
+    "error":   (Dark.RED, f"rgba(239,68,68,0.12)"),
+    "info":    (Dark.BLUE, f"rgba(59,130,246,0.12)"),
 }
 
 _TOAST_DURATIONS = {

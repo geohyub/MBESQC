@@ -86,7 +86,7 @@ class _QCModuleCard(QFrame):
             self._state, state_config["locked"])
 
         self.setStyleSheet(f"""
-            _QCModuleCard {{
+            QFrame {{
                 background: {Dark.DARK};
                 border: 1px solid {border_color};
                 border-radius: {Radius.SM}px;

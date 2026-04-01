@@ -73,7 +73,7 @@ class DropZone(QFrame):
             }}
             QPushButton:hover {{
                 background: {Dark.SLATE};
-                border-color: #06B6D4;
+                border-color: {Dark.CYAN};
             }}
         """)
         browse_btn.clicked.connect(self._browse_files)
@@ -100,7 +100,7 @@ class DropZone(QFrame):
                         stop:0 rgba(6,182,212,0.08),
                         stop:1 {Dark.DARK}
                     );
-                    border: 2px dashed #06B6D4;
+                    border: 2px dashed {Dark.CYAN};
                     border-radius: {Radius.LG}px;
                 }}
             """)

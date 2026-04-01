@@ -34,6 +34,7 @@ from desktop.panels.project_detail_panel import ProjectDetailPanel
 from desktop.panels.upload_panel import UploadPanel
 from desktop.panels.analysis_panel import AnalysisPanel
 from desktop.panels.project_form_panel import ProjectFormPanel
+from desktop.panels.dqr_panel import DQRPanel
 from desktop.services.export_service import ExportWorker
 
 
@@ -100,6 +101,11 @@ class MBESQCApp(GeoViewApp):
         self._analysis.back_to_project.connect(
             self.controller.navigate_project_detail.emit)
         self.add_panel("analysis", "\u25C7", "\ubd84\uc11d", self._analysis)
+
+        # DQR (Daily QC Report)
+        self._dqr = DQRPanel()
+        self._dqr.toast_requested.connect(self.controller.toast_requested.emit)
+        self.add_panel("dqr", "\u25A3", "DQR", self._dqr)
 
         self.add_sidebar_separator("\uad00\ub9ac")
 
@@ -222,9 +228,9 @@ class MBESQCApp(GeoViewApp):
         menu = QMenu(self)
         menu.setStyleSheet(f"""
             QMenu {{
-                background: #1A2236;
-                color: #D1D5DB;
-                border: 1px solid #1F2937;
+                background: {Dark.DARK};
+                color: {Dark.TEXT_SEC};
+                border: 1px solid {Dark.BORDER};
                 border-radius: 6px;
                 padding: 4px;
             }}
@@ -233,7 +239,7 @@ class MBESQCApp(GeoViewApp):
                 border-radius: 4px;
             }}
             QMenu::item:selected {{
-                background: #1E293B;
+                background: {Dark.NAVY};
             }}
         """)
 
@@ -286,6 +292,7 @@ class MBESQCApp(GeoViewApp):
         self._export_worker.finished.connect(self._on_export_done)
         self._export_worker.error.connect(self._on_export_error)
         self._export_worker.finished.connect(self._export_thread.quit)
+        self._export_worker.error.connect(self._export_thread.quit)
 
         self.controller.show_toast(f"{fmt.upper()} 보고서 생성 중...", "info")
         self._export_thread.start()

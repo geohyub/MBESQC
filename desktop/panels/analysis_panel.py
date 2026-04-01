@@ -22,7 +22,7 @@ from PySide6.QtCore import Qt, Signal, QThread, Slot, QObject
 from geoview_pyside6.constants import Dark, Font, Space, Radius, TABLE_STYLE, STATUS_ICONS, BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER
 
 from desktop.services.data_service import DataService
-from desktop.services.analysis_service import AnalysisWorker, compute_score
+from desktop.services.analysis_service import AnalysisWorker, compute_score, QC_WEIGHTS
 from desktop.services.insight_service import (
     build_history_story,
     build_module_story,
@@ -36,19 +36,6 @@ from desktop.services.insight_service import (
 from desktop.widgets.score_ring import ScoreRing
 from desktop.widgets.mbes_chart import MBESChartWidget
 
-
-# ── QC Component Weights ──
-QC_WEIGHTS = {
-    "preprocess": 10,
-    "file":      5,
-    "vessel":    10,
-    "offset":    15,
-    "motion":    15,
-    "svp":       10,
-    "coverage":  15,
-    "crossline": 20,
-    "surface":   10,
-}
 
 QC_LABELS = {
     "preprocess": "Pre-Processing",
@@ -110,12 +97,12 @@ class _AnalysisCard(QFrame):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.setStyleSheet(f"""
-            _AnalysisCard {{
+            QFrame {{
                 background: {Dark.DARK};
                 border: 1px solid {Dark.BORDER};
                 border-radius: {Radius.SM}px;
             }}
-            _AnalysisCard:hover {{
+            QFrame:hover {{
                 background: {Dark.NAVY};
                 border-color: {Dark.CYAN};
             }}

@@ -9,9 +9,31 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "mbesqc_desktop.db"
+import sys as _sys
+
+def _resolve_db_path() -> Path:
+    """DB path: prefer user data dir for PyInstaller builds, else project dir."""
+    if getattr(_sys, "frozen", False):
+        # PyInstaller: use AppData to avoid write permission issues
+        appdata = Path.home() / "AppData" / "Local" / "MBESQC"
+        appdata.mkdir(parents=True, exist_ok=True)
+        return appdata / "mbesqc_desktop.db"
+    return Path(__file__).resolve().parent.parent / "mbesqc_desktop.db"
+
+_DB_PATH = _resolve_db_path()
 _local = threading.local()
 _SYNCABLE_PROJECT_DIRS = ("pds_dir", "gsf_dir", "hvf_dir", "s7k_dir", "fau_dir")
+
+# ── Column whitelists (SQL injection prevention) ──
+_ALLOWED_PROJECT_COLS = frozenset({
+    "name", "vessel", "pds_dir", "gsf_dir", "hvf_dir", "s7k_dir", "fau_dir",
+    "om_config_id", "max_pings", "max_gsf_files", "cell_size",
+    "lat_min", "lat_max", "lon_min", "lon_max",
+})
+_ALLOWED_QC_COLS = frozenset({
+    "file_id", "project_id", "status", "score", "grade",
+    "started_at", "finished_at", "result_json", "output_dir",
+})
 _SYNCABLE_EXTS = {
     ".pds": "pds",
     ".gsf": "gsf",
@@ -183,6 +205,8 @@ class DataService:
         sets = []
         vals = []
         for k, v in kwargs.items():
+            if k not in _ALLOWED_PROJECT_COLS:
+                raise ValueError(f"Invalid column for projects: {k}")
             sets.append(f"{k} = ?")
             vals.append(v)
         if not sets:
@@ -248,6 +272,8 @@ class DataService:
         sets = []
         vals = []
         for k, v in kwargs.items():
+            if k not in _ALLOWED_QC_COLS:
+                raise ValueError(f"Invalid column for qc_results: {k}")
             sets.append(f"{k} = ?")
             vals.append(v)
         if not sets:

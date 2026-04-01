@@ -67,7 +67,7 @@ class ExportWorker(QObject):
         if not done_results:
             raise ValueError("완료된 QC 결과가 없습니다. 먼저 프로젝트 QC를 실행하세요.")
 
-        latest = done_results[0]
+        latest = max(done_results, key=lambda r: r.get("finished_at") or "")
         try:
             latest_data = json.loads(latest.get("result_json") or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -284,8 +284,9 @@ class ExportWorker(QObject):
                     ws_charts.add_image(img, f"A{row_pos}")
                     row_pos += 28
 
-        except Exception:
-            pass  # Charts are optional; don't fail export
+        except Exception as chart_err:
+            import logging
+            logging.getLogger(__name__).warning("Chart generation skipped: %s", chart_err)
 
         wb.save(self._output_path)
 
@@ -309,10 +310,16 @@ class ExportWorker(QObject):
 
         doc = Document()
 
+        # Default font for body
+        style = doc.styles['Normal']
+        style.font.name = 'Pretendard'
+        style.font.size = Pt(11)
+
         # Title
         title = doc.add_heading(level=0)
         run = title.add_run(f"MBES QC Report")
         run.font.size = Pt(24)
+        run.font.name = 'Pretendard'
 
         # Project info
         doc.add_paragraph(f"Project: {project['name']}" if project else "")

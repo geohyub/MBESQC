@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QSizePolicy, QScrollArea, QLineEdit, QComboBox,
 )
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 
 from geoview_pyside6.constants import Dark, Font, Space, Radius, TABLE_STYLE, BTN_PRIMARY, STATUS_ICONS
 from geoview_pyside6.widgets import KPICard
@@ -450,12 +451,12 @@ class ProjectDetailPanel(QWidget):
                 self._table.setItem(i, 4, QTableWidgetItem(format_number(score, 1)))
                 status_text = "PROJECT QC" if project_snapshot else f"{STATUS_ICONS.get('DONE', '')} DONE"
                 status_item = QTableWidgetItem(status_text)
-                status_item.setForeground(Qt.cyan if project_snapshot else Qt.green)
+                status_item.setForeground(QColor(Dark.CYAN) if project_snapshot else QColor(Dark.GREEN))
                 self._table.setItem(i, 5, status_item)
             elif r and r["status"] == "running":
                 self._table.setItem(i, 4, QTableWidgetItem("---"))
                 status_item = QTableWidgetItem(f"{STATUS_ICONS.get('RUNNING', '')} RUNNING")
-                status_item.setForeground(Qt.cyan)
+                status_item.setForeground(QColor(Dark.CYAN))
                 self._table.setItem(i, 5, status_item)
             else:
                 self._table.setItem(i, 4, QTableWidgetItem("---"))
