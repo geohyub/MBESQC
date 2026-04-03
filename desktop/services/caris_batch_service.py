@@ -65,7 +65,8 @@ class CarisBatchConfig:
     vessel_name: str = ""
     day_filter: str = ""          # e.g. "2025-090" for day-of-year filtering
     tide_file: str = ""           # .tid tide file path
-    crs: str = "EPSG:4326"
+    svp_dir: str = ""             # SVP file or directory path
+    crs: str = "EPSG:32652"          # UTM 52N (default for South Korea)
 
     # Grid parameters
     grid_resolution: float = 1.0  # meters
@@ -172,9 +173,10 @@ class CarisBatchRunner(QObject):
             steps = [
                 ("Create HIPS", self._step_create_hips),
                 ("Import", self._step_import),
-                ("Georeference", self._step_georeference),
                 ("Filter", self._step_filter),
-                ("Create Grid", self._step_create_grid),
+                ("Georeference", self._step_georeference),
+                ("Create Depth Grid", self._step_create_grid),
+                ("Create TPU Grid", self._step_create_tpu_grid),
                 ("Render Surfaces", self._step_render_surfaces),
                 ("Export Surfaces", self._step_export_surfaces),
                 ("Export GSF", self._step_export_gsf),
@@ -185,17 +187,25 @@ class CarisBatchRunner(QObject):
                 ok = fn(out)
                 self.step_done.emit(name, ok)
                 if not ok:
-                    self.error.emit(f"'{name}' 단계에서 실패했습니다. 로그를 확인하세요.")
+                    # Include last _run_cmd output in error message
+                    last_out = getattr(self, '_last_cmd_output', '')
+                    self.error.emit(
+                        f"'{name}' 단계에서 실패했습니다.\n{last_out[:500]}"
+                    )
                     return
 
             self.finished.emit(str(out))
 
         except Exception as e:
+            import traceback
             log.exception("CarisBatch pipeline failed")
-            self.error.emit(str(e))
+            self.error.emit(f"{e}\n{traceback.format_exc()}")
 
     def _run_cmd(self, args: list[str]) -> tuple[bool, str]:
         """Execute carisbatch with args and return (success, output)."""
+        if not self._exe:
+            self._last_cmd_output = "carisbatch executable not found"
+            return False, self._last_cmd_output
         cmd = [self._exe, "--run"] + args
         log.info("carisbatch: %s", " ".join(cmd))
 
@@ -204,21 +214,25 @@ class CarisBatchRunner(QObject):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=600,
+                encoding="utf-8",
+                errors="replace",
+                timeout=1800,  # 30 min — Grid creation can be slow
             )
-            output = result.stdout + result.stderr
+            output = (result.stdout or "") + (result.stderr or "")
+            self._last_cmd_output = output
             if result.returncode != 0:
                 log.error("carisbatch failed (rc=%d): %s", result.returncode, output)
                 return False, output
             return True, output
         except subprocess.TimeoutExpired:
-            return False, "carisbatch timed out (10 min)"
+            return False, "carisbatch timed out (30 min)"
         except FileNotFoundError:
             return False, f"carisbatch not found at: {self._exe}"
 
     def _hips_uri(self) -> str:
         """Build HIPS URI with optional vessel/day filter."""
-        uri = f"file:///{self._config.hips_file.replace(os.sep, '/')}"
+        hips = self._config.hips_file or ""
+        uri = f"file:///{hips.replace(os.sep, '/')}"
         params = []
         if self._config.vessel_name:
             params.append(f"Vessel={self._config.vessel_name}")
@@ -243,16 +257,19 @@ class CarisBatchRunner(QObject):
             return True
 
         # Auto-generate .hips path if not specified
+        # CARIS requires: folder name == hips file name (e.g., ProjectName/ProjectName.hips)
         if not hips_path:
             project_name = Path(out_dir).name or "MBESQC_Project"
-            hips_path = out_dir / f"{project_name}.hips"
+            hips_dir = out_dir / project_name
+            hips_dir.mkdir(parents=True, exist_ok=True)
+            hips_path = hips_dir / f"{project_name}.hips"
             self._config.hips_file = str(hips_path)
 
         args = [
             "CreateHIPSFile",
-            "--output-crs", self._config.crs,
             str(hips_path),
         ]
+        log.info("exe=%s, hips=%s", self._exe, hips_path)
         ok, output = self._run_cmd(args)
         if ok:
             log.info("HIPS project created: %s", hips_path)
@@ -299,8 +316,19 @@ class CarisBatchRunner(QObject):
         return ok
 
     def _step_georeference(self, out_dir: Path) -> bool:
-        """Georeference bathymetry (includes TPU computation)."""
+        """Georeference bathymetry (includes SVC + TPU computation)."""
         args = ["GeoreferenceHIPSBathymetry"]
+
+        # SVP: apply SVC if SVP files available
+        svp_path = self._config.svp_dir
+        if svp_path:
+            p = Path(svp_path)
+            if p.is_dir() or p.is_file():
+                args += ["--compute-svc", "--svp", str(p)]
+
+        # TPU: compute THU/TVU for IHO S-44 compliance
+        args.append("--compute-tpu")
+
         if self._config.tide_file and Path(self._config.tide_file).is_file():
             args += ["--tide-file", self._config.tide_file]
         args.append(self._hips_uri())
@@ -311,33 +339,85 @@ class CarisBatchRunner(QObject):
         """Apply depth and attitude filters."""
         uri = self._hips_uri()
 
-        # Filter observed depths
-        ok1, _ = self._run_cmd(["FilterObservedDepths", uri])
-        # Filter processed depths
-        ok2, _ = self._run_cmd(["FilterProcessedDepths", uri])
-        # Filter attitude
-        ok3, _ = self._run_cmd(["FilterHIPSAttitude", uri])
+        # Filter observed depths (--bathymetry-type required in v12)
+        ok1, out1 = self._run_cmd(["FilterObservedDepths", "--bathymetry-type", "SWATH", uri])
+        if not ok1:
+            log.warning("FilterObservedDepths failed: %s", out1[:200])
 
-        return ok1 and ok2 and ok3
+        # Filter processed depths (optional, may fail if no surface exists yet)
+        ok2, out2 = self._run_cmd(["FilterProcessedDepths", uri])
+        if not ok2:
+            log.warning("FilterProcessedDepths skipped: %s", out2[:200])
+
+        # Filter attitude (--sensor-type required in v12)
+        ok3, out3 = self._run_cmd(["FilterHIPSAttitude", "--sensor-type", "HEAVE", uri])
+        if not ok3:
+            log.warning("FilterHIPSAttitude skipped: %s", out3[:200])
+
+        # Don't fail pipeline if only optional filters fail
+        return ok1
 
     def _step_create_grid(self, out_dir: Path) -> bool:
-        """Create HIPS grid surface."""
+        """Create Depth grid surface (Swath Angle method).
+
+        Per GeoView MBES QC Manual v2.00:
+          Gridding Method: Swath Angle
+          Compute Band: Density, Std_Dev
+          Maximum Footprint: 1
+        """
         output_csar = out_dir / "surface.csar"
         args = [
             "CreateHIPSGrid",
             "--gridding-method", self._config.gridding_method,
-            "--resolution", str(self._config.grid_resolution),
+            "--resolution", f"{self._config.grid_resolution} m",
             "--output-crs", self._config.crs,
+            "--include-flag", "ACCEPTED",
+            "--include-flag", "EXAMINED",
+            "--include-flag", "OUTSTANDING",
+            "--compute-band", "DENSITY",
+            "--compute-band", "STD_DEV",
             self._hips_uri(),
             str(output_csar),
         ]
-        ok, _ = self._run_cmd(args)
+        ok, out = self._run_cmd(args)
+        if not ok:
+            log.error("CreateHIPSGrid (Depth) failed: %s", out[:500])
         return ok
+
+    def _step_create_tpu_grid(self, out_dir: Path) -> bool:
+        """Create TPU grid surface (Shoalest Depth true Position method).
+
+        Per GeoView MBES QC Manual v2.00:
+          Gridding Method: Shoalest Depth true Position
+          Bands: Depth_TPU (=TVU), Position_TPU (=THU) — auto-generated
+        """
+        output_csar = out_dir / "tpu_surface.csar"
+        args = [
+            "CreateHIPSGrid",
+            "--gridding-method", "SHOAL_TRUE",
+            "--resolution", f"{self._config.grid_resolution} m",
+            "--output-crs", self._config.crs,
+            "--include-flag", "ACCEPTED",
+            "--include-flag", "EXAMINED",
+            "--include-flag", "OUTSTANDING",
+            self._hips_uri(),
+            str(output_csar),
+        ]
+        ok, out = self._run_cmd(args)
+        if not ok:
+            log.warning("CreateHIPSGrid (TPU) failed: %s", out[:500])
+        return True  # TPU grid failure shouldn't block pipeline
 
     def _step_render_surfaces(self, out_dir: Path) -> bool:
         """Render grid surfaces as coloured images for DQR slides via RenderRaster."""
+        input_csar = out_dir / "surface.csar"
+        if not input_csar.is_file():
+            log.warning("No surface.csar found, skipping render")
+            return False
+
         all_ok = True
         for band in self._config.surface_types:
+            rendered_csar = out_dir / f"rendered_{band.lower()}.csar"
             args = [
                 "RenderRaster",
                 "--input-band", band,
@@ -351,29 +431,93 @@ class CarisBatchRunner(QObject):
                     str(self._config.shading_altitude),
                     str(self._config.shading_exaggeration),
                 ]
-            args.append(self._hips_uri())
-            ok, _ = self._run_cmd(args)
+            args += [str(input_csar), str(rendered_csar)]
+            ok, out = self._run_cmd(args)
             if not ok:
-                log.warning("Failed to render surface band: %s", band)
-                all_ok = False
+                if "does not exist" in out:
+                    log.info("Band %s not available in surface, skipping", band)
+                else:
+                    log.warning("Failed to render band %s: %s", band, out[:200])
+                    all_ok = False
         return all_ok
 
     def _step_export_surfaces(self, out_dir: Path) -> bool:
-        """Export rendered surfaces as GeoTIFF images for DQR slides."""
+        """Export surfaces as GeoTIFF images for DQR slides.
+
+        Exports two versions per band:
+          - surface_<band>.tif  — rendered RGBA image (for PPT display)
+          - raw_<band>.tif      — raw values (for colorbar range)
+        """
+        input_csar = out_dir / "surface.csar"
         all_ok = True
+
         for band in self._config.surface_types:
-            output_file = out_dir / f"surface_{band.lower()}.tif"
+            # 1. Export rendered RGBA image
+            rendered = out_dir / f"rendered_{band.lower()}.csar"
+            if rendered.is_file():
+                output_img = out_dir / f"surface_{band.lower()}.tif"
+                args = [
+                    "ExportRaster", "--output-format", "GeoTIFF",
+                    str(rendered), str(output_img),
+                ]
+                ok, out = self._run_cmd(args)
+                if not ok:
+                    log.warning("Failed to export rendered %s: %s", band, out[:200])
+
+        # 2. Export raw depth surface (1-band float GeoTIFF)
+        # Named surface_depth.tif so dqr_ppt.py finds it for hybrid rendering
+        if input_csar.is_file():
+            depth_tif = out_dir / "surface_depth.tif"
             args = [
-                "ExportRaster",
-                "--output-format", "GeoTIFF",
-                "--output", str(output_file),
-                self._hips_uri(),
+                "ExportRaster", "--output-format", "GeoTIFF",
+                str(input_csar), str(depth_tif),
             ]
-            ok, _ = self._run_cmd(args)
-            if not ok:
-                log.warning("Failed to export surface: %s", band)
-                all_ok = False
-        return all_ok
+            ok, out = self._run_cmd(args)
+            if ok:
+                log.info("Depth surface exported: %s", depth_tif)
+            else:
+                log.warning("Failed to export depth surface: %s", out[:200])
+
+        # 3. Export Depth band statistics (for DQR colorbar)
+        if input_csar.is_file():
+            bands_txt = out_dir / "all_bands.txt"
+            band_names = ["Depth", "Density"]
+            include_args = []
+            for b in band_names:
+                unit = "DEFAULT" if b == "Density" else "m"
+                include_args += ["--include", "BAND", b, "3", unit]
+            args = ["ExportCoverageToASCII"] + include_args + [
+                str(input_csar), str(bands_txt),
+            ]
+            self._run_cmd(args)
+
+        # 4. Export TPU surface bands (TVU=Depth_TPU, THU=Position_TPU)
+        tpu_csar = out_dir / "tpu_surface.csar"
+        if tpu_csar.is_file():
+            # Export TPU as GeoTIFF (default band = Depth from SHOAL_TRUE)
+            tpu_tif = out_dir / "surface_tpu.tif"
+            args = [
+                "ExportRaster", "--output-format", "GeoTIFF",
+                str(tpu_csar), str(tpu_tif),
+            ]
+            ok, out = self._run_cmd(args)
+            if ok:
+                log.info("TPU surface exported: %s", tpu_tif)
+
+            # Export TPU band values (Depth_TPU=TVU, Position_TPU=THU)
+            tpu_txt = out_dir / "tpu_bands.txt"
+            args = [
+                "ExportCoverageToASCII",
+                "--include", "BAND", "Depth", "3", "m",
+                "--include", "BAND", "Depth_TPU", "3", "m",
+                "--include", "BAND", "Position_TPU", "3", "m",
+                str(tpu_csar), str(tpu_txt),
+            ]
+            ok_tpu, _ = self._run_cmd(args)
+            if ok_tpu:
+                log.info("TPU bands exported: %s", tpu_txt)
+
+        return True
 
 
     def _step_export_gsf(self, out_dir: Path) -> bool:

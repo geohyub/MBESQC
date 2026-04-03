@@ -47,3 +47,5 @@ reference/EDF_trackplot*.png
 *.db
 reference/
 __pycache__/
+dqr_final/
+*.pds

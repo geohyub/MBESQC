@@ -1,13 +1,13 @@
 """DQR (Daily QC Report) PPT Generator.
 
-Generates an 11-slide PowerPoint presentation — clean, professional light theme.
-Designed for projection and printing.
+Generates an 11-slide PowerPoint presentation — Clean Corporate style.
+Designed for projection and client delivery.
 
-  Slide 1: Cover (navy gradient + white text)
-  Slide 2: Project Information (key-value table)
-  Slide 3: Acquisition Settings
-  Slide 4: Line Information
-  Slide 5: Track Plot
+  Slide 1:  Cover (split panel: dark navy / white)
+  Slide 2:  Project Information (grid table)
+  Slide 3:  Acquisition Settings
+  Slide 4:  Line Information
+  Slide 5:  Track Plot
   Slide 6-11: Surface images (Depth, StdDev, TVU, THU, Density, Backscatter)
 """
 
@@ -24,28 +24,33 @@ try:
     from pptx.dml.color import RGBColor
     from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
     from pptx.oxml.ns import qn
+    from lxml import etree as _etree
     HAS_PPTX = True
 except ImportError:
     HAS_PPTX = False
 
 
-# ── Color Palette (Light Professional) ─────────────────────────
+# ── Color Palette (GeoView Marine — matches Seismic_Processor) ─
 
 _WHITE      = RGBColor(0xFF, 0xFF, 0xFF)
-_BG         = RGBColor(0xFA, 0xFA, 0xFC)   # off-white slide bg
-_NAVY       = RGBColor(0x1B, 0x2A, 0x4A)   # primary heading
-_NAVY_LIGHT = RGBColor(0x2C, 0x3E, 0x6B)   # cover gradient
-_BLUE       = RGBColor(0x2D, 0x6A, 0x9F)   # section number badge
-_TEAL       = RGBColor(0x0E, 0x9A, 0x83)   # accent / GeoView brand
-_TEXT       = RGBColor(0x1F, 0x2D, 0x3D)   # body text
-_TEXT_SEC   = RGBColor(0x5A, 0x6A, 0x7E)   # secondary text
-_TEXT_MUTED = RGBColor(0x8E, 0x99, 0xA4)   # placeholder
-_ROW_EVEN   = RGBColor(0xF4, 0xF6, 0xF8)   # table even row
-_ROW_ODD    = RGBColor(0xFF, 0xFF, 0xFF)   # table odd row
-_ROW_HEADER = RGBColor(0xE8, 0xED, 0xF2)   # table header
-_BORDER     = RGBColor(0xDE, 0xE2, 0xE6)   # subtle border
-_ORANGE     = RGBColor(0xE8, 0x7C, 0x2A)   # warning
-_RED        = RGBColor(0xD9, 0x3B, 0x3B)   # error
+_BG         = RGBColor(0xF8, 0xFA, 0xFB)   # CLR_LIGHT_BG
+_NAVY       = RGBColor(0x1E, 0x3A, 0x5F)   # CLR_NAVY (primary)
+_NAVY_DARK  = RGBColor(0x00, 0x4E, 0x64)   # CLR_DARK_TEAL (gradient end)
+_TEAL       = RGBColor(0x00, 0x77, 0xB6)   # CLR_TEAL (section header)
+_CYAN       = RGBColor(0x00, 0xB4, 0xD8)   # CLR_CYAN (accent lines)
+_ACCENT_LINE = RGBColor(0x00, 0xD4, 0xF5)  # CLR_ACCENT_LINE (thin lines)
+_TEXT       = RGBColor(0x1A, 0x1A, 0x2E)   # CLR_TEXT (body)
+_TEXT_SEC   = RGBColor(0x6C, 0x75, 0x7D)   # CLR_SUBTLE
+_TEXT_MUTED = RGBColor(0x6C, 0x75, 0x7D)   # CLR_SUBTLE
+_ROW_EVEN   = RGBColor(0xED, 0xF4, 0xF7)   # CLR_ALT_ROW
+_ROW_ODD    = RGBColor(0xFF, 0xFF, 0xFF)
+_BORDER     = RGBColor(0xED, 0xF4, 0xF7)   # CLR_ALT_ROW (subtle)
+_KPI_BG     = RGBColor(0xE8, 0xF4, 0xF8)   # CLR_KPI_BG
+_CARD_BG    = RGBColor(0x00, 0x26, 0x4D)   # CLR_CARD_BG
+_ORANGE     = RGBColor(0xED, 0x89, 0x36)
+_RED        = RGBColor(0xE5, 0x3E, 0x3E)
+
+_TOTAL_SLIDES = 10  # excluding cover
 
 
 def generate_dqr_ppt(
@@ -58,6 +63,7 @@ def generate_dqr_ppt(
     survey_area: str = "",
     total_line_km: float = 0.0,
     qc_results: dict | None = None,
+    grid_resolution: float = 1.0,
 ) -> None:
     if not HAS_PPTX:
         return
@@ -66,19 +72,27 @@ def generate_dqr_ppt(
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
+    # Write GSF depth range as fallback for colorbar when band_stats.json is missing
+    if gsf_main and gsf_main.summary and surface_dir:
+        _write_gsf_depth_hint(gsf_main, Path(surface_dir))
+
     _slide_cover(prs, project_name, pds_meta)
     _slide_project_info(prs, pds_meta, hvf)
     _slide_acquisition(prs, pds_meta, gsf_main)
     _slide_line_info(prs, gsf_main, survey_area, total_line_km)
     _slide_track_plot(prs, surface_dir, gsf_main)
 
+    # Pre-render all surfaces from GSF if available
+    if gsf_main and gsf_main.pings and surface_dir:
+        _render_all_from_gsf(gsf_main, Path(surface_dir), grid_resolution)
+
     surface_slides = [
-        ("04", "Bathymetric Average Values Surface", "Depth"),
-        ("05", "Bathymetric Standard Deviation Surface", "Std_Dev"),
-        ("06", "Bathymetric TVU Surface", "TVU"),
-        ("07", "Bathymetric THU Surface", "THU"),
-        ("08", "Bathymetric Density Surface", "Density"),
-        ("09", "Backscatter Surface", "Backscatter"),
+        ("05", "Bathymetric Average Values Surface", "Depth"),
+        ("06", "Bathymetric Standard Deviation Surface", "Std_Dev"),
+        ("07", "Bathymetric TVU Surface", "TVU"),
+        ("08", "Bathymetric THU Surface", "THU"),
+        ("09", "Bathymetric Density Surface", "Density"),
+        ("10", "Backscatter Surface", "Backscatter"),
     ]
     for num, title, surf_name in surface_slides:
         _slide_surface(prs, num, title, surf_name, surface_dir, qc_results)
@@ -94,49 +108,85 @@ def generate_dqr_ppt(
 def _slide_cover(prs, project_name, pds_meta):
     slide = _blank_slide(prs)
 
-    # Navy background for cover only
-    _set_bg(slide, _NAVY)
+    # Full gradient background (Navy → DarkTeal, vertical)
+    bg = slide.background.fill
+    bg.gradient()
+    bg.gradient_angle = 90  # degrees (top→bottom)
+    bg.gradient_stops[0].color.rgb = _NAVY
+    bg.gradient_stops[1].color.rgb = _NAVY_DARK
 
-    # Left accent bar
-    _rect(slide, Inches(0), Inches(0), Inches(0.12), Inches(7.5), _TEAL)
+    # Left cyan stripe
+    _rect(slide, Inches(0), Inches(0), Inches(0.06), Inches(7.5), _CYAN)
 
-    # Top thin line
-    _rect(slide, Inches(0.12), Inches(0), prs.slide_width, Inches(0.04), _TEAL)
-
-    # Report type label
+    # "DAILY QC REPORT" subtitle
     _text(slide, "DAILY QC REPORT",
-          Inches(1.2), Inches(1.5), Inches(10), Inches(0.5),
-          size=14, color=_TEAL, bold=True, spacing=4)
+          Inches(0.4), Inches(1.2), Inches(6.0), Inches(0.5),
+          size=16, color=_CYAN, bold=False, spacing=3)
 
     # Main title
     _text(slide, "Multibeam Echosounder",
-          Inches(1.2), Inches(2.3), Inches(10), Inches(1.2),
-          size=42, color=_WHITE, bold=True)
+          Inches(0.4), Inches(1.8), Inches(10), Inches(1.2),
+          size=40, color=_WHITE, bold=True)
 
-    # Project name
+    # Accent line
+    _rect(slide, Inches(0.4), Inches(3.2), Inches(3.0), Pt(3), _ACCENT_LINE)
+
+    # Project info card
     name = project_name or (pds_meta.project_name if pds_meta else "MBES Survey")
-    _text(slide, name,
-          Inches(1.2), Inches(3.8), Inches(10), Inches(0.8),
-          size=24, color=RGBColor(0xB0, 0xC4, 0xDE))
+    if len(name) > 60:
+        name = name[:57] + "..."
 
-    # Divider
-    _rect(slide, Inches(1.2), Inches(5.0), Inches(3), Inches(0.04), _TEAL)
+    vessel = pds_meta.vessel_name if pds_meta and pds_meta.vessel_name else ""
+    date_str = datetime.datetime.now().strftime("%Y. %m. %d")
 
-    # Date
-    _text(slide, datetime.datetime.now().strftime("%Y. %m. %d"),
-          Inches(1.2), Inches(5.4), Inches(4), Inches(0.5),
-          size=16, color=RGBColor(0x8A, 0x9B, 0xB5))
+    card_y = Inches(3.6)
+    card_items = [
+        ("Project", name),
+        ("Date", date_str),
+    ]
+    if vessel:
+        card_items.append(("Vessel", vessel))
 
-    # Company
+    # Card background (semi-transparent dark)
+    card_h = len(card_items) * 0.42 + 0.2
+    card = slide.shapes.add_shape(
+        5,  # ROUNDED_RECTANGLE
+        Inches(0.4), card_y, Inches(6.0), Inches(card_h),
+    )
+    card.fill.solid()
+    card.fill.fore_color.rgb = _CARD_BG
+    card.line.fill.background()
+    # Set alpha for semi-transparency
+    spPr = card._element.spPr
+    solidFill = spPr.find(qn("a:solidFill"))
+    if solidFill is not None:
+        srgb = solidFill.find(qn("a:srgbClr"))
+        if srgb is not None:
+            alpha = _etree.SubElement(srgb, qn("a:alpha"))
+            alpha.set("val", "75000")  # 75% opacity
+
+    for i, (label, value) in enumerate(card_items):
+        row_y = card_y + Inches(0.1 + i * 0.42)
+        _text(slide, label,
+              Inches(0.7), row_y, Inches(2), Inches(0.2),
+              size=8, bold=True, color=_CYAN)
+        _text(slide, value,
+              Inches(0.7), row_y + Inches(0.18), Inches(5), Inches(0.24),
+              size=14, bold=True, color=_WHITE)
+
+    # Company name (bottom)
     _text(slide, "GEOVIEW CO., Ltd.",
-          Inches(1.2), Inches(6.1), Inches(4), Inches(0.5),
-          size=13, color=RGBColor(0x6E, 0x82, 0xA0))
+          Inches(0.4), Inches(6.6), Inches(4), Inches(0.4),
+          size=12, color=RGBColor(0x6C, 0x75, 0x7D))
+
+    # Footer
+    _footer_bar(slide, prs.slide_width, page=1)
 
 
 def _slide_project_info(prs, pds_meta, hvf):
     slide = _blank_slide(prs)
     _set_bg(slide, _BG)
-    _header_bar(slide, "Project Information", prs.slide_width)
+    _header_bar(slide, "Project Information", prs.slide_width, number="01")
     _footer_bar(slide, prs.slide_width, page=2)
 
     rows = []
@@ -155,20 +205,24 @@ def _slide_project_info(prs, pds_meta, hvf):
                 rows.append(("Mount Angles",
                               f"Pitch = {s.pitch:.3f}   Roll = {s.roll:.3f}   Heading = {s.heading:.3f}"))
                 break
-        sensor_names = [s.name for s in hvf.sensors]
+        sensor_names = sorted(set(_clean_sensor_name(s.name) for s in hvf.sensors))
         if sensor_names:
-            rows.append(("Registered Sensors", ", ".join(sensor_names)))
+            if len(sensor_names) <= 8:
+                rows.append(("Registered Sensors", ", ".join(sensor_names)))
+            else:
+                rows.append(("Registered Sensors",
+                              f"{len(sensor_names)} sensors: {', '.join(sensor_names[:5])}, ..."))
 
     if not rows:
         rows.append(("Status", "No project metadata available"))
 
-    _kv_table(slide, rows, Inches(0.8), Inches(1.8), Inches(11.7))
+    _kv_table(slide, rows, Inches(0.3), Inches(0.85), Inches(12.7))
 
 
 def _slide_acquisition(prs, pds_meta, gsf_main):
     slide = _blank_slide(prs)
     _set_bg(slide, _BG)
-    _header_bar(slide, "Acquisition Settings", prs.slide_width, number="01")
+    _header_bar(slide, "Acquisition Settings", prs.slide_width, number="02")
     _footer_bar(slide, prs.slide_width, page=3)
 
     rows = []
@@ -182,8 +236,23 @@ def _slide_acquisition(prs, pds_meta, gsf_main):
         p0 = gsf_main.pings[0]
         rows.append(("Number of Beams", str(p0.num_beams)))
         if p0.depth is not None:
-            rows.append(("Depth Range (Ping 1)",
-                          f"{p0.depth.min():.1f} ~ {p0.depth.max():.1f} m"))
+            import numpy as np
+            valid_depth = p0.depth[p0.depth != 0]
+            if len(valid_depth) > 0:
+                rows.append(("Swath Depth (Ping 1)",
+                              f"{valid_depth.min():.1f} ~ {valid_depth.max():.1f} m"))
+        if hasattr(p0, 'heading') and p0.heading:
+            rows.append(("Heading (Start)", f"{p0.heading:.1f}\u00b0"))
+        rows.append(("Total Pings", str(len(gsf_main.pings))))
+
+    if gsf_main and gsf_main.summary:
+        s = gsf_main.summary
+        d_min = min(s.min_depth, s.max_depth)
+        d_max = max(s.min_depth, s.max_depth)
+        if abs(d_max - d_min) < 0.05:
+            rows.append(("Depth (Survey)", f"{d_min:.1f} m"))
+        else:
+            rows.append(("Depth Range (Survey)", f"{d_min:.1f} ~ {d_max:.1f} m"))
 
     if gsf_main and gsf_main.svp_profiles:
         svp = gsf_main.svp_profiles[0]
@@ -195,14 +264,24 @@ def _slide_acquisition(prs, pds_meta, gsf_main):
     if not rows:
         rows.append(("Status", "No acquisition data available"))
 
-    _kv_table(slide, rows, Inches(0.8), Inches(1.8), Inches(11.7))
+    _kv_table(slide, rows, Inches(0.3), Inches(0.85), Inches(12.7))
 
 
 def _slide_line_info(prs, gsf_main, survey_area, total_line_km):
     slide = _blank_slide(prs)
     _set_bg(slide, _BG)
-    _header_bar(slide, "Line Information", prs.slide_width, number="02")
+    _header_bar(slide, "Line Information", prs.slide_width, number="03")
     _footer_bar(slide, prs.slide_width, page=4)
+
+    if total_line_km <= 0 and gsf_main and gsf_main.pings:
+        try:
+            import numpy as np
+            lats = np.array([p.latitude for p in gsf_main.pings if p.latitude != 0])
+            lons = np.array([p.longitude for p in gsf_main.pings if p.longitude != 0])
+            if len(lats) > 1:
+                total_line_km = _compute_line_km(lats, lons)
+        except Exception:
+            pass
 
     rows = [
         ("Survey Area", survey_area or "N/A"),
@@ -210,7 +289,12 @@ def _slide_line_info(prs, gsf_main, survey_area, total_line_km):
     ]
     if gsf_main and gsf_main.summary:
         s = gsf_main.summary
-        rows.append(("Depth Range", f"{s.min_depth:.1f} ~ {s.max_depth:.1f} m"))
+        d_min = min(s.min_depth, s.max_depth)
+        d_max = max(s.min_depth, s.max_depth)
+        if abs(d_max - d_min) < 0.05:
+            rows.append(("Depth", f"{d_min:.1f} m"))
+        else:
+            rows.append(("Depth Range", f"{d_min:.1f} ~ {d_max:.1f} m"))
         rows.append(("Latitude", f"{s.min_latitude:.6f} ~ {s.max_latitude:.6f}"))
         rows.append(("Longitude", f"{s.min_longitude:.6f} ~ {s.max_longitude:.6f}"))
         start_t = getattr(s, "start_time", None) or getattr(s, "min_time", None)
@@ -218,47 +302,47 @@ def _slide_line_info(prs, gsf_main, survey_area, total_line_km):
         if start_t and end_t:
             rows.append(("Time Span", f"{start_t} ~ {end_t}"))
 
-    _kv_table(slide, rows, Inches(0.8), Inches(1.8), Inches(11.7))
+    _kv_table(slide, rows, Inches(0.3), Inches(0.85), Inches(12.7))
 
 
 def _slide_track_plot(prs, surface_dir, gsf_main=None):
     slide = _blank_slide(prs)
     _set_bg(slide, _BG)
-    _header_bar(slide, "Track Plot", prs.slide_width, number="03")
+    _header_bar(slide, "Track Plot", prs.slide_width, number="04")
     _footer_bar(slide, prs.slide_width, page=5)
 
     embedded = False
 
-    # 1. Check for existing track plot image
     if surface_dir:
         for name in ["trackplot", "track_plot", "Track", "navigation"]:
             for ext in [".png", ".jpg", ".jpeg"]:
                 p = Path(surface_dir) / f"{name}{ext}"
                 if p.exists():
                     _image_frame(slide, p,
-                                 Inches(0.8), Inches(1.6), Inches(11.7), Inches(5.2))
+                                 Inches(0.3), Inches(0.72), Inches(12.7), Inches(5.83))
                     embedded = True
                     break
             if embedded:
                 break
 
-    # 2. Auto-generate from GSF lat/lon
     if not embedded and gsf_main and gsf_main.pings:
-        track_png = _render_track_plot(gsf_main, Path(surface_dir) if surface_dir else None)
-        if track_png and track_png.exists():
-            _image_frame(slide, track_png,
-                         Inches(0.8), Inches(1.6), Inches(11.7), Inches(5.2))
-            embedded = True
+        result = _render_track_plot(gsf_main, Path(surface_dir) if surface_dir else None)
+        if result:
+            track_png, auto_km = result
+            if track_png and Path(track_png).exists():
+                _image_frame(slide, track_png,
+                             Inches(0.3), Inches(0.72), Inches(12.7), Inches(5.83))
+                embedded = True
 
     if not embedded:
         _placeholder(slide, "Track Plot",
-                     "CARIS Export 또는 측량 소프트웨어에서 생성된 항적 이미지를 삽입하세요")
+                     "CARIS Export or survey software generated track image required")
 
 
 def _slide_surface(prs, number, title, surf_name, surface_dir, qc_results):
     slide = _blank_slide(prs)
     _set_bg(slide, _BG)
-    page = int(number) + 2
+    page = int(number) + 1
     _header_bar(slide, title, prs.slide_width, number=number)
     _footer_bar(slide, prs.slide_width, page=page)
 
@@ -267,18 +351,18 @@ def _slide_surface(prs, number, title, surf_name, surface_dir, qc_results):
         png_path = _render_surface_png(Path(surface_dir), surf_name)
         if png_path and png_path.exists():
             _image_frame(slide, png_path,
-                         Inches(0.8), Inches(1.6), Inches(11.7), Inches(5.0))
+                         Inches(0.3), Inches(0.72), Inches(12.7), Inches(5.43))
             embedded = True
 
     if not embedded:
         _placeholder(slide, title,
-                     "CARIS RenderRaster로 생성된 서페이스 이미지를 삽입하세요")
+                     "Surface image from CARIS RenderRaster required")
 
     # Comment line
     _text(slide, "Comment :",
-          Inches(0.8), Inches(6.85), Inches(1.5), Inches(0.35),
-          size=10, bold=True, color=_TEXT_SEC)
-    _rect(slide, Inches(2.3), Inches(6.88), Inches(10.2), Inches(0.01), _BORDER)
+          Inches(0.3), Inches(6.4), Inches(1.5), Inches(0.3),
+          size=9, bold=True, color=_TEXT_SEC)
+    _rect(slide, Inches(1.8), Inches(6.45), Inches(11.2), Inches(0.01), _BORDER)
 
 
 # ── Layout Components ──────────────────────────────────────────
@@ -295,91 +379,124 @@ def _set_bg(slide, color):
 
 
 def _header_bar(slide, title, slide_width, number=None):
-    """White header area with navy title and teal underline."""
-    # White header bg
-    _rect(slide, Inches(0), Inches(0), slide_width, Inches(1.3), _WHITE)
-    # Teal accent underline
-    _rect(slide, Inches(0), Inches(1.28), slide_width, Inches(0.04), _TEAL)
+    """Gradient header bar (Navy→DarkTeal) with cyan accent line."""
+    # Gradient header background
+    header = slide.shapes.add_shape(1, Inches(0), Inches(0), slide_width, Inches(0.58))
+    fill = header.fill
+    fill.gradient()
+    fill.gradient_stops[0].color.rgb = _NAVY
+    fill.gradient_stops[1].color.rgb = _NAVY_DARK
+    header.line.fill.background()
 
-    # Title
+    # Cyan accent line below header
+    _rect(slide, Inches(0), Inches(0.58), slide_width, Pt(2.5), _ACCENT_LINE)
+
+    # Title (white on dark)
     _text(slide, title,
-          Inches(0.8), Inches(0.35), Inches(9), Inches(0.7),
-          size=24, bold=True, color=_NAVY)
+          Inches(0.35), Inches(0.05), Inches(9), Inches(0.48),
+          size=17, bold=True, color=_WHITE)
 
-    # Number badge (right side, rounded bg)
+    # Page counter (cyan text)
     if number:
-        # Badge background
-        badge = slide.shapes.add_shape(
-            5,  # ROUNDED_RECTANGLE
-            Inches(11.6), Inches(0.35), Inches(1.0), Inches(0.55),
-        )
-        badge.fill.solid()
-        badge.fill.fore_color.rgb = _BLUE
-        badge.line.fill.background()
-
-        _text(slide, number,
-              Inches(11.6), Inches(0.38), Inches(1.0), Inches(0.5),
-              size=18, bold=True, color=_WHITE, align=PP_ALIGN.CENTER)
+        _text(slide, f"{number} / {_TOTAL_SLIDES:02d}",
+              Inches(11.2), Inches(0.10), Inches(1.8), Inches(0.38),
+              size=12, color=_CYAN, align=PP_ALIGN.RIGHT)
 
 
 def _footer_bar(slide, slide_width, page=1):
-    """Subtle footer with company name and page number."""
-    y = Inches(7.15)
-    _rect(slide, Inches(0), y, slide_width, Inches(0.01), _BORDER)
-    _text(slide, "GEOVIEW CO., Ltd.  |  Daily QC Report",
-          Inches(0.8), Inches(7.18), Inches(6), Inches(0.3),
-          size=8, color=_TEXT_MUTED)
-    _text(slide, str(page),
-          Inches(12.0), Inches(7.18), Inches(0.8), Inches(0.3),
-          size=8, color=_TEXT_MUTED, align=PP_ALIGN.RIGHT)
+    """Navy footer with accent line (matches Seismic_Processor)."""
+    footer_h = Inches(0.22)
+    footer_y = Inches(7.5) - footer_h
+    # Accent line above footer
+    _rect(slide, Inches(0), footer_y - Pt(2), slide_width, Pt(2), _ACCENT_LINE)
+    # Navy footer bg
+    _rect(slide, Inches(0), footer_y, slide_width, footer_h, _NAVY)
+    # Company text
+    _text(slide, "Geoview  |  Daily QC Report",
+          Inches(0.35), footer_y + Inches(0.02), Inches(6), Inches(0.18),
+          size=7, color=_WHITE)
+    # Page number (cyan)
+    _text(slide, f"Page {page}",
+          Inches(11.5), footer_y + Inches(0.02), Inches(1.5), Inches(0.18),
+          size=7, color=_CYAN, align=PP_ALIGN.RIGHT)
 
 
 def _kv_table(slide, rows, left, top, width):
-    """Professional key-value table with alternating row colors and auto-fit text."""
-    key_w = 3.2
-    width_in = width / 914400
-    val_w = width_in - key_w
+    """Professional grid table with proper borders and alternating rows."""
+    n_rows = len(rows)
+    n_cols = 2
+    key_w = Inches(3.5)
+    val_w = width - key_w
+
+    tbl_shape = slide.shapes.add_table(n_rows, n_cols, left, top, width, Inches(0.55 * n_rows))
+    tbl = tbl_shape.table
+
+    # Set column widths
+    tbl.columns[0].width = key_w
+    tbl.columns[1].width = val_w
 
     for i, (key, val) in enumerate(rows):
-        # Auto row height: taller for long values
-        val_len = len(val)
-        if val_len > 80:
-            row_h = 0.75
-            val_size = 10
-        elif val_len > 50:
-            row_h = 0.60
-            val_size = 11
-        else:
-            row_h = 0.48
-            val_size = 12
+        row = tbl.rows[i]
+        row.height = Inches(0.72) if len(val) > 80 else Inches(0.55)
 
-        y = top + Inches(sum(
-            0.75 if len(rows[j][1]) > 80 else 0.60 if len(rows[j][1]) > 50 else 0.48
-            for j in range(i)
-        ))
-        bg = _ROW_EVEN if i % 2 == 0 else _ROW_ODD
+        # Key cell
+        key_cell = row.cells[0]
+        _style_cell(key_cell, key, size=14, bold=True, color=_NAVY,
+                    fill=_ROW_EVEN, align=PP_ALIGN.LEFT)
+        _set_cell_borders(key_cell, _BORDER)
 
-        # Row background
-        row_shape = slide.shapes.add_shape(
-            5,  # ROUNDED_RECTANGLE
-            left, y, Inches(width_in), Inches(row_h - 0.04),
-        )
-        row_shape.fill.solid()
-        row_shape.fill.fore_color.rgb = bg
-        row_shape.line.color.rgb = _BORDER
-        row_shape.line.width = Pt(0.5)
+        # Value cell
+        val_cell = row.cells[1]
+        fill = _ROW_ODD if i % 2 == 0 else _ROW_EVEN
+        val_size = 12 if len(val) > 80 else 13
+        _style_cell(val_cell, val, size=val_size, bold=False, color=_TEXT,
+                    fill=fill, align=PP_ALIGN.LEFT)
+        _set_cell_borders(val_cell, _BORDER)
 
-        # Key (left, bold, navy)
-        _text(slide, key,
-              left + Inches(0.4), y + Inches(0.06),
-              Inches(key_w), Inches(row_h - 0.12),
-              size=12, bold=True, color=_NAVY)
 
-        # Value (right, auto-sized, word-wrapped)
-        _text(slide, val,
-              left + Inches(key_w + 0.3), y + Inches(0.06),
-              Inches(val_w - 0.3), Inches(row_h - 0.12),
-              size=val_size, color=_TEXT)
+def _style_cell(cell, text, size=13, bold=False, color=_TEXT,
+                fill=_WHITE, align=PP_ALIGN.LEFT):
+    """Apply consistent formatting to a table cell."""
+    cell.text = ""
+    cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+
+    # Fill
+    tcPr = cell._tc.get_or_add_tcPr()
+    solidFill = _etree.SubElement(tcPr, qn("a:solidFill"))
+    _etree.SubElement(solidFill, qn("a:srgbClr")).set("val", str(fill))
+
+    # Margins
+    tcPr.set("marL", str(Inches(0.25)))
+    tcPr.set("marR", str(Inches(0.15)))
+    tcPr.set("marT", str(Inches(0.06)))
+    tcPr.set("marB", str(Inches(0.06)))
+
+    # Text
+    p = cell.text_frame.paragraphs[0]
+    p.text = text
+    p.font.size = Pt(size)
+    p.font.bold = bold
+    p.font.color.rgb = color
+    p.font.name = "Pretendard"
+    p.alignment = align
+    cell.text_frame.word_wrap = True
+
+
+def _set_cell_borders(cell, color, width=Pt(0.5)):
+    """Set all 4 borders of a table cell via XML."""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+
+    color_hex = str(color)
+    for edge in ["a:lnL", "a:lnR", "a:lnT", "a:lnB"]:
+        ln = _etree.SubElement(tcPr, qn(edge))
+        ln.set("w", str(int(width)))
+        ln.set("cmpd", "sng")
+
+        sf = _etree.SubElement(ln, qn("a:solidFill"))
+        _etree.SubElement(sf, qn("a:srgbClr")).set("val", color_hex)
+
+        _etree.SubElement(ln, qn("a:prstDash")).set("val", "solid")
 
 
 def _image_frame(slide, image_path, left, top, max_w, max_h):
@@ -389,35 +506,21 @@ def _image_frame(slide, image_path, left, top, max_w, max_h):
         with PILImage.open(str(image_path)) as img:
             img_w, img_h = img.size
     except Exception:
-        img_w, img_h = 1600, 900  # fallback 16:9
+        img_w, img_h = 1600, 900
 
-    # Fit within max bounds preserving aspect ratio
     aspect = img_w / img_h
-    max_w_in = max_w / 914400  # Emu to inches
+    max_w_in = max_w / 914400
     max_h_in = max_h / 914400
 
     if aspect > (max_w_in / max_h_in):
-        # Image is wider → fit to width
         w = max_w_in
         h = w / aspect
     else:
-        # Image is taller → fit to height
         h = max_h_in
         w = h * aspect
 
-    # Center within available area
     x = (left / 914400) + (max_w_in - w) / 2
     y = (top / 914400) + (max_h_in - h) / 2
-
-    # Border frame
-    border = slide.shapes.add_shape(
-        5, Inches(x - 0.03), Inches(y - 0.03),
-        Inches(w + 0.06), Inches(h + 0.06),
-    )
-    border.fill.solid()
-    border.fill.fore_color.rgb = _WHITE
-    border.line.color.rgb = _BORDER
-    border.line.width = Pt(1)
 
     slide.shapes.add_picture(str(image_path),
                               Inches(x), Inches(y), Inches(w), Inches(h))
@@ -426,8 +529,8 @@ def _image_frame(slide, image_path, left, top, max_w, max_h):
 def _placeholder(slide, title, hint):
     """Dashed border placeholder for missing images."""
     frame = slide.shapes.add_shape(
-        5,  # ROUNDED_RECTANGLE
-        Inches(0.8), Inches(1.6), Inches(11.7), Inches(5.2),
+        1,  # RECTANGLE (not rounded)
+        Inches(0.3), Inches(0.72), Inches(12.7), Inches(5.83),
     )
     frame.fill.solid()
     frame.fill.fore_color.rgb = _WHITE
@@ -437,10 +540,462 @@ def _placeholder(slide, title, hint):
 
     _text(slide, title,
           Inches(4), Inches(3.4), Inches(5.5), Inches(0.5),
-          size=16, bold=True, color=_TEXT_MUTED, align=PP_ALIGN.CENTER)
+          size=18, bold=True, color=_TEXT_MUTED, align=PP_ALIGN.CENTER)
     _text(slide, hint,
           Inches(3), Inches(4.0), Inches(7.5), Inches(0.5),
-          size=11, color=_TEXT_MUTED, align=PP_ALIGN.CENTER, italic=True)
+          size=13, color=_TEXT_MUTED, align=PP_ALIGN.CENTER, italic=True)
+
+
+# ── Helpers ────────────────────────────────────────────────────
+
+
+def _render_all_from_gsf(gsf_main, surface_dir: Path, grid_resolution: float = 1.0):
+    """Render Depth/Density/Std_Dev/TVU/THU surfaces from GSF sounding data.
+
+    Direct gridding from beam-level data ensures image and colorbar match 100%.
+    Only generates PNGs that don't already exist.
+    """
+    try:
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from scipy import stats as sp_stats
+
+        # Check which surfaces need rendering
+        needed = {}
+        # Check which surfaces need GSF-based rendering
+        # Prefer CARIS outputs (proper georef) when available:
+        #   Depth/Density: CARIS TIF + ASCII bands
+        #   TVU/THU: CARIS TPU bands (tpu_bands.txt + surface_tpu.tif)
+        #   Std_Dev: GSF (CARIS ASCII Std_Dev is unreliable)
+        _has_caris_tif = any(
+            (surface_dir / f"surface_{n.lower()}.tif").exists() or
+            (surface_dir / f"{n}.tif").exists()
+            for n in ["Depth", "depth"]
+        )
+        _has_caris_tpu = (surface_dir / "tpu_bands.txt").exists() and \
+                         (surface_dir / "surface_tpu.tif").exists()
+        for name in ["Depth", "Density", "Std_Dev", "TVU", "THU"]:
+            png = surface_dir / f"{name}.png"
+            if png.exists():
+                continue
+            if name in ("Depth", "Density") and _has_caris_tif:
+                continue  # _render_surface_png handles via CARIS TIF/ASCII
+            if name in ("TVU", "THU") and _has_caris_tpu:
+                continue  # _render_surface_png handles via TPU bands
+            needed[name] = True
+        if not needed:
+            return
+
+        # Check GSF has required data
+        p0 = gsf_main.pings[0]
+        if p0.depth is None or p0.across_track is None:
+            return
+
+        # Collect beam positions in UTM
+        try:
+            from pyproj import Transformer
+            mean_lon = np.mean([p.longitude for p in gsf_main.pings[:10]
+                                if p.longitude != 0])
+            mean_lat = np.mean([p.latitude for p in gsf_main.pings[:10]
+                                if p.latitude != 0])
+            zone = int((mean_lon + 180) / 6) + 1
+            epsg = 32600 + zone if mean_lat >= 0 else 32700 + zone
+            if 124 < mean_lon < 132 and 33 < mean_lat < 39:
+                epsg = 32652
+            transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}",
+                                                always_xy=True)
+        except Exception:
+            return
+
+        # Compute actual course from consecutive ping positions
+        # (GSF heading field is often constant/wrong after CARIS export)
+        _ping_e, _ping_n = [], []
+        _valid_idx = []
+        for i, p in enumerate(gsf_main.pings):
+            if p.latitude == 0 or p.depth is None:
+                continue
+            e, n = transformer.transform(p.longitude, p.latitude)
+            _ping_e.append(e)
+            _ping_n.append(n)
+            _valid_idx.append(i)
+        _ping_e = np.array(_ping_e)
+        _ping_n = np.array(_ping_n)
+
+        # Course from positions spaced >= 10m apart (robust to GPS jitter)
+        _MIN_BASELINE = 10.0  # meters
+        _dists = np.sqrt(np.diff(_ping_e) ** 2 + np.diff(_ping_n) ** 2)
+        _cum_dist = np.concatenate([[0], np.cumsum(_dists)])
+
+        _courses = np.zeros(len(_ping_e))
+        for j in range(len(_ping_e)):
+            # Look ahead/behind for baseline
+            fwd = min(len(_ping_e) - 1,
+                      np.searchsorted(_cum_dist, _cum_dist[j] + _MIN_BASELINE))
+            bwd = max(0,
+                      np.searchsorted(_cum_dist, _cum_dist[j] - _MIN_BASELINE))
+            if fwd == j:
+                fwd = min(len(_ping_e) - 1, j + 1)
+            if bwd == j:
+                bwd = max(0, j - 1)
+            de = _ping_e[fwd] - _ping_e[bwd]
+            dn = _ping_n[fwd] - _ping_n[bwd]
+            _courses[j] = np.degrees(np.arctan2(de, dn)) % 360
+
+        # Build course lookup: valid_idx[j] → course[j]
+        _course_map = dict(zip(_valid_idx, _courses))
+
+        xs, ys, depths = [], [], []
+        # Separate coords for TVU/THU (some pings may lack error arrays)
+        xs_ve, ys_ve, vert_errors = [], [], []
+        xs_he, ys_he, horiz_errors = [], [], []
+        for i, p in enumerate(gsf_main.pings):
+            if p.latitude == 0 or p.depth is None:
+                continue
+
+            # Use actual array length (CARIS export may strip rejected beams)
+            n = len(p.depth)
+            bx, by = transformer.transform(
+                np.full(n, p.longitude), np.full(n, p.latitude))
+            if p.across_track is not None and len(p.across_track) == n:
+                # Use computed course (reliable) instead of GSF heading (often wrong)
+                course_deg = _course_map.get(i, p.heading or 0)
+                h = np.radians(course_deg)
+                # Across-track: perpendicular to course (starboard positive)
+                bx += p.across_track * np.cos(h)
+                by -= p.across_track * np.sin(h)
+                # Along-track: parallel to course (forward positive)
+                if p.along_track is not None and len(p.along_track) == n:
+                    bx += p.along_track * np.sin(h)
+                    by += p.along_track * np.cos(h)
+
+            # Filter rejected beams via beam_flags
+            mask = np.ones(n, dtype=bool)
+            if p.beam_flags is not None and len(p.beam_flags) == n:
+                mask = (p.beam_flags == 0)  # 0 = accepted
+            # Also filter zero/negative depths
+            mask &= (p.depth > 0)
+
+            xs.append(bx[mask])
+            ys.append(by[mask])
+            depths.append(p.depth[mask])
+            if p.vert_error is not None and len(p.vert_error) == n:
+                ve = np.clip(p.vert_error[mask], 0, 100)
+                vert_errors.append(ve)
+                xs_ve.append(bx[mask])
+                ys_ve.append(by[mask])
+            if p.horiz_error is not None and len(p.horiz_error) == n:
+                he = np.clip(p.horiz_error[mask], 0, 100)
+                horiz_errors.append(he)
+                xs_he.append(bx[mask])
+                ys_he.append(by[mask])
+
+        if not xs:
+            return
+
+        xs = np.concatenate(xs)
+        ys = np.concatenate(ys)
+        depths = np.concatenate(depths)
+
+        res = grid_resolution
+        xbins = np.arange(xs.min(), xs.max() + res, res)
+        ybins = np.arange(ys.min(), ys.max() + res, res)
+
+        cell_area = f"{res:.0f}m" if res >= 1 else f"{res}m"
+        _BAND_LABEL = {"Depth": "Depth (m)", "Std_Dev": "Std Dev (m)",
+                       "TVU": "TVU (m)", "THU": "THU (m)",
+                       "Density": f"Soundings / {cell_area}\u00b2 cell"}
+        _CMAP = {"Depth": "jet", "Std_Dev": "YlOrRd", "TVU": "RdYlBu_r",
+                 "THU": "RdYlBu_r", "Density": "viridis"}
+
+        def _grid_and_render(name, values, statistic="mean",
+                             xs_override=None, ys_override=None,
+                             values_override=None,
+                             pctl_lo=2, pctl_hi=98):
+            png = surface_dir / f"{name}.png"
+            if png.exists():
+                return
+            _xs = xs_override if xs_override is not None else xs
+            _ys = ys_override if ys_override is not None else ys
+            _vals = values_override if values_override is not None else values
+            grid, _, _, _ = sp_stats.binned_statistic_2d(
+                _xs, _ys, _vals, statistic=statistic, bins=[xbins, ybins])
+            grid = grid.T
+            grid[grid == 0] = np.nan
+
+            valid = ~np.isnan(grid)
+            if not valid.any():
+                return
+
+            # Crop to data extent
+            rv = np.any(valid, axis=1)
+            cv = np.any(valid, axis=0)
+            r0, r1 = np.where(rv)[0][[0, -1]]
+            c0, c1 = np.where(cv)[0][[0, -1]]
+            pad = max(2, int(0.02 * max(r1 - r0, c1 - c0)))
+            grid = grid[max(0, r0 - pad):r1 + pad + 1,
+                         max(0, c0 - pad):c1 + pad + 1]
+
+            # Percentile clipping for colorbar range
+            valid_vals = grid[~np.isnan(grid)]
+            vmin = float(np.percentile(valid_vals, pctl_lo))
+            vmax = float(np.percentile(valid_vals, pctl_hi))
+            if abs(vmax - vmin) < 1e-10:
+                vmin, vmax = float(valid_vals.min()), float(valid_vals.max())
+
+            # Rotate 90° if very elongated N-S → fits landscape PPT slide
+            nrows, ncols = grid.shape
+            rotated = False
+            if nrows > ncols * 2.5:
+                grid = np.rot90(grid, k=1)  # rotate CCW
+                nrows, ncols = grid.shape
+                rotated = True
+
+            # Adaptive figsize: target landscape for PPT (12.7" x 5.4" frame)
+            aspect = nrows / max(ncols, 1)
+            fig_h = 8
+            fig_w = max(10, fig_h / max(aspect, 0.3))
+            fig_w = min(fig_w, 20)
+            fig_w += 2  # colorbar space
+
+            cmap = plt.get_cmap(_CMAP.get(name, "jet")).copy()
+            cmap.set_bad("white")
+
+            fig, (ax, cax) = plt.subplots(1, 2, figsize=(fig_w, fig_h),
+                gridspec_kw={"width_ratios": [16, 1], "wspace": 0.05},
+                facecolor="white")
+            im = ax.imshow(grid, cmap=cmap, aspect="equal",
+                           interpolation="nearest", vmin=vmin, vmax=vmax)
+            _draw_colorbar(plt, cax, vmin, vmax, name, _BAND_LABEL,
+                           mappable=im)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            fig.savefig(str(png), dpi=200, bbox_inches="tight",
+                        facecolor="white", edgecolor="none")
+            plt.close(fig)
+
+        # Render each surface
+        if "Depth" in needed:
+            _grid_and_render("Depth", depths)
+
+        if "Density" in needed:
+            # Density = raw sounding count per grid cell
+            _grid_and_render("Density", depths, statistic="count",
+                             pctl_lo=5, pctl_hi=95)
+
+        if "Std_Dev" in needed:
+            # Std_Dev: standard deviation of ALL soundings in each cell
+            # Same coverage as Depth (consistent with CARIS Std_Dev band)
+            _grid_and_render("Std_Dev", depths, statistic="std",
+                             pctl_lo=0, pctl_hi=95)
+
+        if "TVU" in needed and vert_errors:
+            _grid_and_render("TVU", None,
+                             xs_override=np.concatenate(xs_ve),
+                             ys_override=np.concatenate(ys_ve),
+                             values_override=np.concatenate(vert_errors))
+
+        if "THU" in needed and horiz_errors:
+            _grid_and_render("THU", None,
+                             xs_override=np.concatenate(xs_he),
+                             ys_override=np.concatenate(ys_he),
+                             values_override=np.concatenate(horiz_errors))
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("GSF surface render failed: %s", e)
+
+
+def _render_tpu_from_gsf(gsf_main, surface_dir: Path):
+    """Render TVU/THU surface images from GSF sounding-level TPU data."""
+    try:
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mticker
+        from scipy import stats as sp_stats
+
+        # Check if GSF has TPU data
+        p0 = gsf_main.pings[0]
+        if not hasattr(p0, 'vert_error') or p0.vert_error is None:
+            return
+        if len(p0.vert_error) == 0 or p0.vert_error.max() == 0:
+            return
+
+        # Collect beam positions + errors
+        xs, ys, data_map = [], [], {"TVU": [], "THU": []}
+        try:
+            from pyproj import Transformer
+            mean_lon = np.mean([p.longitude for p in gsf_main.pings[:10]
+                                if p.longitude != 0])
+            mean_lat = np.mean([p.latitude for p in gsf_main.pings[:10]
+                                if p.latitude != 0])
+            zone = int((mean_lon + 180) / 6) + 1
+            epsg = 32600 + zone if mean_lat >= 0 else 32700 + zone
+            if 124 < mean_lon < 132 and 33 < mean_lat < 39:
+                epsg = 32652
+            transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}",
+                                                always_xy=True)
+        except Exception:
+            return
+
+        for p in gsf_main.pings:
+            if p.latitude == 0 or p.vert_error is None:
+                continue
+            n = p.num_beams
+            bx, by = transformer.transform(
+                np.full(n, p.longitude), np.full(n, p.latitude))
+            if p.across_track is not None:
+                h = np.radians(p.heading or 0)
+                bx += p.across_track * np.cos(h)
+                by -= p.across_track * np.sin(h)
+                if p.along_track is not None:
+                    bx += p.along_track * np.sin(h)
+                    by += p.along_track * np.cos(h)
+            xs.append(bx)
+            ys.append(by)
+            data_map["TVU"].append(p.vert_error)
+            if p.horiz_error is not None:
+                data_map["THU"].append(p.horiz_error)
+
+        if not xs:
+            return
+
+        xs = np.concatenate(xs)
+        ys = np.concatenate(ys)
+
+        _BAND_LABEL = {"TVU": "TVU (m)", "THU": "THU (m)"}
+
+        for name in ["TVU", "THU"]:
+            png_path = surface_dir / f"{name}.png"
+            if png_path.exists():
+                continue  # Already rendered
+            if not data_map[name]:
+                continue
+
+            values = np.concatenate(data_map[name])
+            if values.max() == 0:
+                continue
+
+            # Bin into 1m grid
+            res = 1.0
+            xbins = np.arange(xs.min(), xs.max() + res, res)
+            ybins = np.arange(ys.min(), ys.max() + res, res)
+            grid, _, _, _ = sp_stats.binned_statistic_2d(
+                xs, ys, values, statistic="mean", bins=[xbins, ybins])
+            grid = grid.T
+            grid[grid == 0] = np.nan
+
+            # Crop
+            valid = ~np.isnan(grid)
+            if not valid.any():
+                continue
+            rv = np.any(valid, axis=1)
+            cv = np.any(valid, axis=0)
+            r0, r1 = np.where(rv)[0][[0, -1]]
+            c0, c1 = np.where(cv)[0][[0, -1]]
+            pad = max(2, int(0.02 * max(r1 - r0, c1 - c0)))
+            grid = grid[max(0, r0 - pad):r1 + pad + 1,
+                         max(0, c0 - pad):c1 + pad + 1]
+
+            cmap = plt.get_cmap("RdYlBu_r").copy()
+            cmap.set_bad("white")
+
+            fig, (ax, cax) = plt.subplots(1, 2, figsize=(14, 10),
+                gridspec_kw={"width_ratios": [16, 1], "wspace": 0.04},
+                facecolor="white")
+            im = ax.imshow(grid, cmap=cmap, aspect="equal",
+                           interpolation="nearest")
+            vmin, vmax = float(np.nanmin(grid)), float(np.nanmax(grid))
+            _draw_colorbar(plt, cax, vmin, vmax, name, _BAND_LABEL,
+                           mappable=im)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+
+            fig.savefig(str(png_path), dpi=200, bbox_inches="tight",
+                        facecolor="white", edgecolor="none")
+            plt.close(fig)
+    except Exception:
+        pass
+
+
+def _write_gsf_depth_hint(gsf_main, surface_dir: Path):
+    """Write GSF depth range to band_stats.json as fallback for colorbar."""
+    stats_file = surface_dir / "band_stats.json"
+    if stats_file.exists():
+        return  # already has real stats
+    try:
+        import json
+        s = gsf_main.summary
+        d_min = min(s.min_depth, s.max_depth)
+        d_max = max(s.min_depth, s.max_depth)
+        stats = {"Depth": {"min": round(d_min, 3), "max": round(d_max, 3)}}
+        with open(str(stats_file), "w") as f:
+            json.dump(stats, f, indent=2)
+    except Exception:
+        pass
+
+
+def _clean_sensor_name(name: str) -> str:
+    """Strip timestamps and IDs from sensor names.
+
+    'DepthSensor_T1_2025-230 00:00:00' → 'DepthSensor (T1)'
+    'DepthSensor_T1_2025-044_00:00:00' → 'DepthSensor (T1)'
+    """
+    import re
+    # Remove date-time suffix: underscore OR space before HH:MM:SS
+    cleaned = re.sub(r'_\d{4}-\d{2,3}[\s_]\d{2}:\d{2}:\d{2}$', '', name)
+    # Convert DepthSensor_T1 → DepthSensor (T1)
+    m = re.match(r'^(\w+Sensor)_([A-Z]\d+)$', cleaned)
+    if m:
+        return f"{m.group(1)} ({m.group(2)})"
+    return cleaned
+
+
+def _draw_colorbar(plt, cax, vmin, vmax, surf_name, band_labels, mappable=None):
+    """Draw a polished colorbar on the given axes."""
+    import matplotlib.cm as cm
+    import matplotlib.ticker as mticker
+
+    _CMAP = {
+        "Depth": "jet", "Std_Dev": "YlOrRd", "TVU": "RdYlBu_r",
+        "THU": "RdYlBu_r", "Density": "viridis", "Backscatter": "gray_r",
+    }
+    cmap_name = _CMAP.get(surf_name, "jet")
+
+    if mappable is None:
+        norm = plt.Normalize(vmin=vmin, vmax=vmax)
+        sm = cm.ScalarMappable(cmap=cmap_name, norm=norm)
+        sm.set_array([])
+        cbar = plt.colorbar(sm, cax=cax)
+    else:
+        cbar = plt.colorbar(mappable, cax=cax)
+
+    label = band_labels.get(surf_name, surf_name)
+    cbar.set_label(label, fontsize=22, color="#1E3A5F",
+                   fontweight="bold", labelpad=18, rotation=270, va="bottom")
+
+    # Smart tick formatting
+    val_range = abs(vmax - vmin)
+    if val_range > 100:
+        fmt = mticker.FuncFormatter(lambda x, _: f"{x:,.0f}")
+    elif val_range > 1:
+        fmt = mticker.FuncFormatter(lambda x, _: f"{x:.1f}")
+    else:
+        fmt = mticker.FuncFormatter(lambda x, _: f"{x:.3f}")
+    cbar.ax.yaxis.set_major_formatter(fmt)
+
+    cbar.ax.tick_params(labelsize=18, colors="#1A202C",
+                        width=1.5, length=5, direction="out", pad=6)
+    cbar.outline.set_linewidth(1.2)
+    cbar.outline.set_edgecolor("#CBD5E0")
 
 
 # ── Primitives ─────────────────────────────────────────────────
@@ -475,26 +1030,26 @@ def _text(slide, text, left, top, width, height,
 
 
 def _render_surface_png(surface_dir: Path, surf_name: str) -> Path | None:
-    """Find or render a surface image for embedding."""
+    """Render surface image from raw data with matching colorbar.
+
+    Strategy (priority order):
+      0. Return existing PNG (created by _render_all_from_gsf) — preferred
+      1. Single-band float TIF → render with colorbar
+      2. RGBA TIF → display as-is
+      3. Fall back to existing JPG
+    """
     name_lower = surf_name.lower()
 
-    # Check for pre-existing images
+    # ── Strategy 0: Existing PNG already rendered from GSF ──
     for pattern in [surf_name, f"surface_{name_lower}", name_lower]:
-        for ext in [".png", ".jpg", ".jpeg"]:
-            p = surface_dir / f"{pattern}{ext}"
-            if p.exists():
-                return p
+        p = surface_dir / f"{pattern}.png"
+        if p.exists():
+            return p
 
-    # Try GeoTIFF rendering
-    candidates = [
-        surface_dir / f"{surf_name}.tif",
-        surface_dir / f"{surf_name}.tiff",
-        surface_dir / f"surface_{name_lower}.tif",
-        surface_dir / f"surface_{name_lower}.tiff",
-    ]
-    if surf_name == "Depth":
-        candidates += [surface_dir / "DTM.tif", surface_dir / "DTM.tiff",
-                        surface_dir / "EDF_BAT_1M.tiff"]
+    _BAND_LABEL = {"Depth": "Depth (m)", "Std_Dev": "Std Dev (m)",
+                   "TVU": "TVU (m)", "THU": "THU (m)",
+                   "Density": "Soundings / cell",
+                   "Backscatter": "Backscatter (dB)"}
 
     try:
         import matplotlib
@@ -502,104 +1057,285 @@ def _render_surface_png(surface_dir: Path, surf_name: str) -> Path | None:
         import matplotlib.pyplot as plt
         import numpy as np
 
+            # ── Strategy 1: Single-band float TIF (exact colorbar match) ──
+        # Build candidate list with aliases
+        _ALIASES = {
+            "TVU": ["tvu", "uncertainty"],
+            "THU": ["thu"],
+            "Depth": ["depth", "dtm", "bat"],
+        }
+        search_names = [name_lower] + _ALIASES.get(surf_name, [])
+
+        candidates = []
+        for sn in search_names:
+            candidates += [
+                surface_dir / f"{surf_name}.tif",
+                surface_dir / f"{surf_name}.tiff",
+                surface_dir / f"surface_{sn}.tif",
+                surface_dir / f"surface_{sn}.tiff",
+            ]
+        if surf_name == "Depth":
+            candidates += [surface_dir / "DTM.tif", surface_dir / "DTM.tiff",
+                            surface_dir / "EDF_BAT_1M.tiff"]
+        # Fuzzy match
+        for tif in surface_dir.glob("*.tif*"):
+            for sn in search_names:
+                if sn in tif.stem.lower() and tif not in candidates:
+                    candidates.append(tif)
+
         for tiff_path in candidates:
             if not tiff_path.exists():
                 continue
-
             try:
                 import rasterio
                 with rasterio.open(str(tiff_path)) as src:
-                    if src.count >= 3:
-                        rgb = src.read([1, 2, 3])
-                        rgb = np.moveaxis(rgb, 0, -1)
-                        from PIL import Image
-                        img = Image.fromarray(rgb.astype(np.uint8))
-                        png_path = surface_dir / f"{surf_name}.png"
-                        img.save(str(png_path))
-                        return png_path
-                    data = src.read(1)
+                    if src.count == 1:
+                        # Single-band float → render directly (colorbar matches)
+                        data = src.read(1).astype(float)
+                        nd = src.nodata
+                        if nd is not None:
+                            data[data == nd] = np.nan
+                        data[np.abs(data) > 1e6] = np.nan
+                        if np.all(np.isnan(data)):
+                            continue
+                        return _render_array(plt, np, data, surf_name,
+                                             surface_dir, _BAND_LABEL)
+
+                    elif src.count >= 3:
+                        # RGBA image — display as-is WITHOUT colorbar
+                        return _render_rgba_image(plt, np, tiff_path,
+                                                  surface_dir, surf_name)
             except ImportError:
                 return None
-
-            # Mask nodata values (common: -9999, 0, very large values)
-            nodata_val = src.nodata if hasattr(src, 'nodata') and src.nodata is not None else -9999
-            data = data.astype(float)
-            data[data == nodata_val] = np.nan
-            data[data == 0] = np.nan  # often nodata in CARIS exports
-            data[np.abs(data) > 1e6] = np.nan
-            if np.all(np.isnan(data)):
-                continue
-
-            # Tight crop: remove all-NaN rows/cols
-            valid = ~np.isnan(data)
-            rows_valid = np.any(valid, axis=1)
-            cols_valid = np.any(valid, axis=0)
-            if rows_valid.any() and cols_valid.any():
-                r0, r1 = np.where(rows_valid)[0][[0, -1]]
-                c0, c1 = np.where(cols_valid)[0][[0, -1]]
-                # Add small padding
-                pad = max(2, int(0.02 * max(r1 - r0, c1 - c0)))
-                r0, r1 = max(0, r0 - pad), min(data.shape[0], r1 + pad)
-                c0, c1 = max(0, c0 - pad), min(data.shape[1], c1 + pad)
-                data = data[r0:r1, c0:c1]
-
-            # CARIS Rainbow.cma 표준 팔레트 매칭
-            cmap_map = {
-                "Depth": "jet",             # CARIS Rainbow: blue(deep)→red(shallow)
-                "Std_Dev": "jet",           # CARIS Rainbow
-                "TVU": "jet",              # CARIS Rainbow
-                "THU": "jet",              # CARIS Rainbow
-                "Density": "jet",          # CARIS Rainbow
-                "Backscatter": "gray_r",    # Backscatter: dark=high return
-            }
-            cmap_name = cmap_map.get(surf_name, "viridis")
-            cmap_obj = plt.get_cmap(cmap_name).copy()
-            cmap_obj.set_bad(color="white")  # NaN → white background
-
-            # Figure size matches data aspect ratio (max 13 inches wide)
-            data_h, data_w = data.shape
-            aspect = data_w / data_h
-            if aspect >= 1:
-                fig_w = min(13, 13)
-                fig_h = fig_w / aspect + 1.0  # +1 for colorbar/title
-            else:
-                fig_h = min(9, 9)
-                fig_w = fig_h * aspect + 2.0  # +2 for colorbar
-
-            fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor="white")
-            im = ax.imshow(data, cmap=cmap_obj, aspect="equal",
-                           interpolation="nearest")
-            cbar = plt.colorbar(im, ax=ax, shrink=0.85, pad=0.015,
-                                aspect=30)
-            cbar.set_label(surf_name, fontsize=11, color="#1F2D3D",
-                           labelpad=8)
-            cbar.ax.tick_params(labelsize=9, colors="#5A6A7E")
-
-            ax.set_title(surf_name, fontsize=15, fontweight="bold",
-                         color="#1B2A4A", pad=14)
-            ax.set_xticks([])
-            ax.set_yticks([])
-            for spine in ax.spines.values():
-                spine.set_visible(False)
-
-            png_path = surface_dir / f"{surf_name}.png"
-            fig.savefig(str(png_path), dpi=200, bbox_inches="tight",
-                        facecolor="white", edgecolor="none")
-            plt.close(fig)
-            return png_path
 
     except Exception:
         pass
 
+    # ── Strategy 2: Reconstruct from ASCII bands + depth TIF mask ──
+    # ── Strategy 2: Reconstruct from ASCII bands ──
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        # Density from Depth grid ASCII bands
+        bands_txt = surface_dir / "all_bands.txt"
+        raw_tif = surface_dir / "surface_depth.tif"
+        if not raw_tif.exists():
+            raw_tif = surface_dir / "raw_values.tif"
+        if bands_txt.exists() and raw_tif.exists() and surf_name == "Density":
+            result = _render_from_ascii_bands(
+                plt, np, surface_dir, surf_name, bands_txt, raw_tif, _BAND_LABEL)
+            if result:
+                return result
+
+        # TVU/THU from TPU grid ASCII bands
+        tpu_txt = surface_dir / "tpu_bands.txt"
+        tpu_tif = surface_dir / "surface_tpu.tif"
+        if tpu_txt.exists() and tpu_tif.exists() and surf_name in ("TVU", "THU"):
+            _TPU_COLS = {"TVU": 1, "THU": 2}  # col0=Depth, col1=Depth_TPU, col2=Position_TPU
+            result = _render_from_ascii_bands(
+                plt, np, surface_dir, surf_name, tpu_txt, tpu_tif, _BAND_LABEL,
+                col_override=_TPU_COLS.get(surf_name))
+            if result:
+                return result
+    except Exception:
+        pass
+
+    # ── Fallback: Existing JPG ──
+    for pattern in [surf_name, f"surface_{name_lower}", name_lower]:
+        for ext in [".jpg", ".jpeg"]:
+            p = surface_dir / f"{pattern}{ext}"
+            if p.exists():
+                return p
+
     return None
 
 
-def _render_track_plot(gsf_main, output_dir: Path | None = None) -> Path | None:
+def _render_from_ascii_bands(plt, np, surface_dir, surf_name, bands_txt, raw_tif, labels,
+                             col_override=None):
+    """Reconstruct per-band 2D array from ExportCoverageToASCII output."""
+    import rasterio
+
+    _BAND_COLS = {"Depth": 0, "Density": 1, "Std_Dev": 2}
+    col_idx = col_override if col_override is not None else _BAND_COLS.get(surf_name)
+    if col_idx is None:
+        return None
+
+    try:
+        ascii_data = np.loadtxt(str(bands_txt))
+        if col_idx >= ascii_data.shape[1]:
+            return None
+
+        with rasterio.open(str(raw_tif)) as src:
+            template = src.read(1).astype(float)
+            nd = src.nodata
+            if nd is not None:
+                template[template == nd] = np.nan
+            template[np.abs(template) > 1e6] = np.nan
+
+        # Reconstruct 2D array: fill valid pixels with band values
+        band_values = ascii_data[:, col_idx]
+        result = np.full_like(template, np.nan)
+        valid_mask = ~np.isnan(template)
+
+        if valid_mask.sum() != len(band_values):
+            return None
+
+        result[valid_mask] = band_values
+        return _render_array(plt, np, result, surf_name, surface_dir, labels)
+    except Exception:
+        return None
+
+
+def _render_array(plt, np, data, surf_name, surface_dir, labels):
+    """Render a 2D numpy array with colorbar — image and colorbar use same colormap."""
+    _CMAP = {
+        "Depth": "jet", "Std_Dev": "YlOrRd", "TVU": "RdYlBu_r",
+        "THU": "RdYlBu_r", "Density": "viridis", "Backscatter": "gray_r",
+    }
+
+    # CARIS exports depth as negative (below surface) — flip for display
+    if surf_name == "Depth":
+        vv = data[~np.isnan(data)]
+        if len(vv) > 0 and vv.mean() < 0:
+            data = np.abs(data)
+
+    # Tight crop
+    valid = ~np.isnan(data)
+    rows_valid = np.any(valid, axis=1)
+    cols_valid = np.any(valid, axis=0)
+    if rows_valid.any() and cols_valid.any():
+        r0, r1 = np.where(rows_valid)[0][[0, -1]]
+        c0, c1 = np.where(cols_valid)[0][[0, -1]]
+        pad = max(2, int(0.02 * max(r1 - r0, c1 - c0)))
+        r0, r1 = max(0, r0 - pad), min(data.shape[0], r1 + pad)
+        c0, c1 = max(0, c0 - pad), min(data.shape[1], c1 + pad)
+        data = data[r0:r1, c0:c1]
+
+    # Rotate if very elongated vertically (for landscape PPT)
+    nrows, ncols = data.shape
+    if nrows > ncols * 2.5:
+        data = np.rot90(data, k=1)
+
+    # Percentile clipping for colorbar
+    valid_vals = data[~np.isnan(data)]
+    vmin = float(np.percentile(valid_vals, 2))
+    vmax = float(np.percentile(valid_vals, 98))
+    if abs(vmax - vmin) < 1e-10:
+        vmin, vmax = float(valid_vals.min()), float(valid_vals.max())
+
+    # Adaptive figsize
+    nrows, ncols = data.shape
+    aspect = nrows / max(ncols, 1)
+    fig_h = 8
+    fig_w = max(10, fig_h / max(aspect, 0.3))
+    fig_w = min(fig_w, 20) + 2
+
+    cmap_obj = plt.get_cmap(_CMAP.get(surf_name, "jet")).copy()
+    cmap_obj.set_bad(color="white")
+
+    fig, (ax, cax) = plt.subplots(1, 2, figsize=(fig_w, fig_h),
+        gridspec_kw={"width_ratios": [16, 1], "wspace": 0.04},
+        facecolor="white")
+    im = ax.imshow(data, cmap=cmap_obj, aspect="equal", interpolation="nearest",
+                   vmin=vmin, vmax=vmax)
+    _draw_colorbar(plt, cax, vmin, vmax,
+                   surf_name, labels, mappable=im)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    png_path = surface_dir / f"{surf_name}.png"
+    fig.savefig(str(png_path), dpi=200, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
+    plt.close(fig)
+    return png_path
+
+
+def _render_rgba_image(plt, np, tiff_path, surface_dir, surf_name):
+    """Display RGBA GeoTIFF with colorbar from band_stats.json."""
+    import rasterio
+
+    _BAND_LABEL = {"Depth": "Depth (m)", "Std_Dev": "Std Dev (m)",
+                   "TVU": "TVU (m)", "THU": "THU (m)",
+                   "Density": "Density (pts/cell)",
+                   "Backscatter": "Backscatter (dB)"}
+
+    with rasterio.open(str(tiff_path)) as src:
+        if src.count == 4:
+            rgba = src.read([1, 2, 3, 4])
+            rgba = np.moveaxis(rgba, 0, -1).astype(np.uint8)
+            black = (rgba[:,:,0] == 0) & (rgba[:,:,1] == 0) & (rgba[:,:,2] == 0)
+            rgba[black] = [255, 255, 255, 255]
+            img_arr = rgba[:,:,:3]
+        else:
+            rgb = src.read([1, 2, 3])
+            img_arr = np.moveaxis(rgb, 0, -1).astype(np.uint8)
+            black = (img_arr[:,:,0] == 0) & (img_arr[:,:,1] == 0) & (img_arr[:,:,2] == 0)
+            img_arr[black] = [255, 255, 255]
+
+    # Crop to content
+    non_white = np.any(img_arr < 250, axis=2)
+    if non_white.any():
+        rv = np.any(non_white, axis=1)
+        cv = np.any(non_white, axis=0)
+        r0, r1 = np.where(rv)[0][[0, -1]]
+        c0, c1 = np.where(cv)[0][[0, -1]]
+        pad = max(4, int(0.02 * max(r1 - r0, c1 - c0)))
+        r0 = max(0, r0 - pad); r1 = min(img_arr.shape[0], r1 + pad)
+        c0 = max(0, c0 - pad); c1 = min(img_arr.shape[1], c1 + pad)
+        img_arr = img_arr[r0:r1, c0:c1]
+
+    # Try to get value range for colorbar from band_stats.json
+    vmin, vmax = None, None
+    stats_file = surface_dir / "band_stats.json"
+    if stats_file.is_file():
+        try:
+            import json
+            with open(str(stats_file)) as f:
+                stats = json.load(f)
+            if surf_name in stats:
+                vmin = stats[surf_name]["min"]
+                vmax = stats[surf_name]["max"]
+        except Exception:
+            pass
+
+    has_cbar = vmin is not None and vmax is not None and abs(vmax - vmin) > 1e-10
+
+    if has_cbar:
+        fig, (ax, cax) = plt.subplots(1, 2, figsize=(14, 10),
+            gridspec_kw={"width_ratios": [16, 1], "wspace": 0.04},
+            facecolor="white")
+    else:
+        fig, ax = plt.subplots(figsize=(14, 10), facecolor="white")
+        cax = None
+
+    ax.imshow(img_arr, aspect="equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    if has_cbar and cax is not None:
+        _draw_colorbar(plt, cax, vmin, vmax, surf_name, _BAND_LABEL)
+
+    png_path = surface_dir / f"{surf_name}.png"
+    fig.savefig(str(png_path), dpi=200, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
+    plt.close(fig)
+    return png_path
+
+
+def _render_track_plot(gsf_main, output_dir: Path | None = None) -> tuple | None:
     """Generate track plot PNG from GSF ping lat/lon coordinates."""
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
+        import matplotlib.ticker as mticker
         import numpy as np
 
         lats = [p.latitude for p in gsf_main.pings if p.latitude != 0]
@@ -611,34 +1347,111 @@ def _render_track_plot(gsf_main, output_dir: Path | None = None) -> Path | None:
         lats = np.array(lats)
         lons = np.array(lons)
 
-        # Color by time index (blue→red = start→end)
-        colors = np.linspace(0, 1, len(lats))
+        # Convert WGS84 lat/lon to UTM
+        plot_x, plot_y = lons, lats
+        utm_label = ""
+        try:
+            from pyproj import Transformer
+            mean_lon, mean_lat = lons.mean(), lats.mean()
+            zone = int((mean_lon + 180) / 6) + 1
+            hemisphere = "north" if mean_lat >= 0 else "south"
+            epsg = 32600 + zone if hemisphere == "north" else 32700 + zone
+            if 124 < mean_lon < 132 and 33 < mean_lat < 39:
+                epsg = 32652
+            transformer = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+            plot_x, plot_y = transformer.transform(lons, lats)
+            utm_label = f"EPSG:{epsg}"
+        except Exception:
+            pass
 
-        fig, ax = plt.subplots(figsize=(12, 8), facecolor="white")
+        is_utm = abs(plot_x.mean()) > 1000
 
-        sc = ax.scatter(lons, lats, c=colors, cmap="coolwarm",
-                        s=3, alpha=0.8, edgecolors="none")
+        # Adaptive figure size — match data aspect ratio to fill slide
+        xr = plot_x.max() - plot_x.min()
+        yr = plot_y.max() - plot_y.min()
+        data_aspect = xr / yr if yr > 0 else 1.5
+        # Target slide area is ~11.7" x 5.3" (ratio ~2.2)
+        if data_aspect > 1.5:
+            fig_w, fig_h = 14, 8
+        elif data_aspect > 0.5:
+            fig_w, fig_h = 12, 10
+        else:
+            fig_w, fig_h = 9, 12
 
-        # Start/end markers
-        ax.plot(lons[0], lats[0], "o", color="#0E9A83", markersize=10,
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor="white")
+
+        # Gradient track line (segments colored by time)
+        colors = np.linspace(0, 1, len(plot_x))
+
+        # Thicker track backbone
+        ax.plot(plot_x, plot_y, "-", color="#CBD5E0", linewidth=3, alpha=0.4, zorder=1)
+
+        # Color scatter — larger points for visibility
+        sc = ax.scatter(plot_x, plot_y, c=colors, cmap="RdYlBu_r",
+                        s=8, alpha=0.85, edgecolors="none", zorder=3)
+
+        # Start/End markers — larger, with labels
+        ax.plot(plot_x[0], plot_y[0], "o", color="#38A169", markersize=16,
+                markeredgecolor="white", markeredgewidth=2.5,
                 label="Start", zorder=5)
-        ax.plot(lons[-1], lats[-1], "s", color="#D93B3B", markersize=10,
+        ax.plot(plot_x[-1], plot_y[-1], "s", color="#E53E3E", markersize=16,
+                markeredgecolor="white", markeredgewidth=2.5,
                 label="End", zorder=5)
 
-        # Track line (thin, semi-transparent)
-        ax.plot(lons, lats, "-", color="#1B2A4A", linewidth=0.5, alpha=0.3)
+        if is_utm:
+            ax.set_xlabel("Easting (m)", fontsize=15, color="#1A202C",
+                          fontweight="semibold", labelpad=12)
+            ax.set_ylabel("Northing (m)", fontsize=15, color="#1A202C",
+                          fontweight="semibold", labelpad=12)
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(
+                lambda x, _: f"{x:,.0f}"))
+            ax.yaxis.set_major_formatter(mticker.FuncFormatter(
+                lambda y, _: f"{y:,.0f}"))
+            if utm_label:
+                ax.text(0.98, 0.98, utm_label, transform=ax.transAxes,
+                        fontsize=11, color="#A0AEC0", ha="right", va="top",
+                        fontstyle="italic")
+            pad_m = max(xr, yr) * 0.15 + 30
+            ax.set_xlim(plot_x.min() - pad_m, plot_x.max() + pad_m)
+            ax.set_ylim(plot_y.min() - pad_m, plot_y.max() + pad_m)
+        else:
+            ax.xaxis.set_major_formatter(mticker.FuncFormatter(
+                lambda x, _: f"{x:.4f}\u00b0"))
+            ax.yaxis.set_major_formatter(mticker.FuncFormatter(
+                lambda y, _: f"{y:.4f}\u00b0"))
+            ax.set_xlabel("Longitude", fontsize=15, color="#1A202C",
+                          fontweight="semibold", labelpad=12)
+            ax.set_ylabel("Latitude", fontsize=15, color="#1A202C",
+                          fontweight="semibold", labelpad=12)
+            lat_range = lats.max() - lats.min()
+            lon_range = lons.max() - lons.min()
+            pad_d = max(lat_range, lon_range) * 0.10
+            ax.set_xlim(lons.min() - pad_d, lons.max() + pad_d)
+            ax.set_ylim(lats.min() - pad_d, lats.max() + pad_d)
 
-        ax.set_xlabel("Longitude", fontsize=11, color="#1F2D3D")
-        ax.set_ylabel("Latitude", fontsize=11, color="#1F2D3D")
-        ax.set_title("Track Plot", fontsize=15, fontweight="bold",
-                     color="#1B2A4A", pad=14)
-        ax.tick_params(labelsize=9, colors="#5A6A7E")
+        ax.tick_params(labelsize=13, colors="#4A5568", width=1.2, length=5)
+        plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
         ax.set_aspect("equal")
-        ax.legend(fontsize=10, loc="upper right")
-        ax.grid(True, alpha=0.2, color="#9CA3AF")
 
+        # Legend — styled box
+        legend = ax.legend(fontsize=13, loc="upper right", framealpha=0.95,
+                           edgecolor="#CBD5E0", fancybox=True, shadow=False,
+                           handletextpad=0.8, borderpad=0.8)
+        legend.get_frame().set_linewidth(1.2)
+
+        # Grid
+        ax.grid(True, alpha=0.2, color="#A0AEC0", linewidth=0.6, linestyle="--")
         for spine in ax.spines.values():
-            spine.set_color("#DEE2E6")
+            spine.set_color("#CBD5E0")
+            spine.set_linewidth(1.2)
+
+        # Total km badge
+        total_km = _compute_line_km(lats, lons)
+        ax.text(0.02, 0.03, f"Total: {total_km:.1f} km",
+                transform=ax.transAxes, fontsize=13, color="#1E3A5F",
+                fontweight="bold", ha="left", va="bottom",
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="#F0F4F8",
+                          edgecolor="#CBD5E0", linewidth=1.2, alpha=0.95))
 
         save_dir = output_dir or Path(".")
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -646,7 +1459,20 @@ def _render_track_plot(gsf_main, output_dir: Path | None = None) -> Path | None:
         fig.savefig(str(png_path), dpi=200, bbox_inches="tight",
                     facecolor="white", edgecolor="none")
         plt.close(fig)
-        return png_path
+        return png_path, total_km
 
     except Exception:
         return None
+
+
+def _compute_line_km(lats, lons):
+    """Compute total track line distance in km using Haversine formula."""
+    import numpy as np
+    R = 6371.0
+    lat_r = np.radians(lats)
+    lon_r = np.radians(lons)
+    dlat = np.diff(lat_r)
+    dlon = np.diff(lon_r)
+    a = np.sin(dlat / 2) ** 2 + np.cos(lat_r[:-1]) * np.cos(lat_r[1:]) * np.sin(dlon / 2) ** 2
+    c = 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+    return float(np.sum(R * c))

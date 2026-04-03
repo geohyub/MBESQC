@@ -511,7 +511,7 @@ class _CLIAutomationTab(QWidget):
         elif preset_id == "gocean":
             base = root / "G-OCEAN"
             self._hips_input.input.setText("")
-            self._vessel_input.input.setText(str(self._find_vessel(base / "Vessel", "HY_TEST1")))
+            self._vessel_input.input.setText(str(self._find_vessel(base / "Vessel", "GOCEAN_T50P")))
             self._raw_input.input.setText(str(base / "Raw"))
             self._gsf_input.input.setText("")
             tide_dir = base / "Tide"

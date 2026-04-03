@@ -32,8 +32,8 @@ class DqrConfig:
     input_files: list[str] = field(default_factory=list)
     output_dir: str = ""
     grid_resolution: float = 1.0
-    grid_type: str = "Regular"
-    crs: str = "EPSG:4326"
+    grid_type: str = "SWATH_ANGLE"
+    crs: str = "EPSG:32652"          # UTM 52N — Grid requires projected CRS
     vessel_name: str = ""
     day_filter: str = ""
 
@@ -162,6 +162,7 @@ class DqrWorker(QObject):
             project_name=cfg.project_name,
             survey_area=cfg.survey_area,
             total_line_km=cfg.total_line_km,
+            grid_resolution=cfg.grid_resolution,
         )
 
         self.log_msg.emit(f"✓ DQR 저장: {output_pptx}")
