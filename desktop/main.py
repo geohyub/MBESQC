@@ -29,6 +29,7 @@ from geoview_pyside6.constants import Dark, Font
 from desktop.app_controller import AppController
 from desktop.widgets.toast import ToastManager
 from desktop.services.data_service import DataService
+from desktop.i18n import install as install_i18n
 from desktop.panels.dashboard_panel import DashboardPanel
 from desktop.panels.project_detail_panel import ProjectDetailPanel
 from desktop.panels.upload_panel import UploadPanel
@@ -69,6 +70,9 @@ class MBESQCApp(GeoViewApp):
         self._export_worker = None
         self._old_workers = []
 
+        install_i18n(self)
+        self.set_language(self.lang_manager.lang, refresh=True)
+
     def setup_panels(self):
         """Register all 5 panels."""
         # Dashboard
@@ -77,7 +81,7 @@ class MBESQCApp(GeoViewApp):
             self.controller.navigate_project_detail.emit)
         self._dashboard.new_project.connect(
             self.controller.navigate_form_new.emit)
-        self.add_panel("dashboard", "\u25A0", "\ub300\uc2dc\ubcf4\ub4dc", self._dashboard)
+        self.add_panel("dashboard", "\u25A0", self.t("sidebar.dashboard", "\ub300\uc2dc\ubcf4\ub4dc"), self._dashboard)
 
         # Project Detail
         self._project_detail = ProjectDetailPanel()
@@ -89,29 +93,29 @@ class MBESQCApp(GeoViewApp):
             self.controller.navigate_form_edit.emit)
         self._project_detail.toast_requested.connect(
             self.controller.toast_requested.emit)
-        self.add_panel("project_detail", "\u25C6", "\ud504\ub85c\uc81d\ud2b8", self._project_detail)
+        self.add_panel("project_detail", "\u25C6", self.t("sidebar.project_detail", "\ud504\ub85c\uc81d\ud2b8"), self._project_detail)
 
         # Upload
         self._upload = UploadPanel()
         self._upload.upload_complete.connect(self._on_upload_complete)
-        self.add_panel("upload", "\u25B2", "\uc5c5\ub85c\ub4dc", self._upload)
+        self.add_panel("upload", "\u25B2", self.t("sidebar.upload", "\uc5c5\ub85c\ub4dc"), self._upload)
 
         # Analysis
         self._analysis = AnalysisPanel()
         self._analysis.back_to_project.connect(
             self.controller.navigate_project_detail.emit)
-        self.add_panel("analysis", "\u25C7", "\ubd84\uc11d", self._analysis)
+        self.add_panel("analysis", "\u25C7", self.t("sidebar.analysis", "\ubd84\uc11d"), self._analysis)
 
         # DQR (Daily QC Report)
         self._dqr = DQRPanel()
         self._dqr.toast_requested.connect(self.controller.toast_requested.emit)
-        self.add_panel("dqr", "\u25A3", "DQR", self._dqr)
+        self.add_panel("dqr", "\u25A3", self.t("sidebar.dqr", "DQR"), self._dqr)
 
-        self.add_sidebar_separator("\uad00\ub9ac")
+        self.add_sidebar_separator(self.t("sidebar.management", "\uad00\ub9ac"))
 
         # Project Form
         self._form = ProjectFormPanel()
-        self.add_panel("form", "+", "\uc0c8 \ud504\ub85c\uc81d\ud2b8", self._form)
+        self.add_panel("form", "+", self.t("sidebar.form", "\uc0c8 \ud504\ub85c\uc81d\ud2b8"), self._form)
 
         # Connect form signals
         self._form.saved.connect(self._on_project_saved)
@@ -125,11 +129,11 @@ class MBESQCApp(GeoViewApp):
             return
         parts = []
         if ctx.vessel_config_id is not None:
-            parts.append(f"OM Config: #{ctx.vessel_config_id}")
+            parts.append(self.t("status.om_config", "OM Config: #{value}").format(value=ctx.vessel_config_id))
         if ctx.vessel:
-            parts.append(f"Vessel: {ctx.vessel}")
+            parts.append(self.t("status.vessel", "Vessel: {value}").format(value=ctx.vessel))
         if ctx.paths and ctx.paths.raw_data:
-            parts.append(f"Raw: {ctx.paths.raw_data}")
+            parts.append(self.t("status.raw_data", "Raw: {path}").format(path=ctx.paths.raw_data))
         if parts:
             self.status_bar.showMessage(" | ".join(parts), 5000)
 
@@ -173,7 +177,7 @@ class MBESQCApp(GeoViewApp):
         self._switch_to("analysis")
         file_info = DataService.get_file(file_id)
         if file_info:
-            self.top_bar.set_title(f"\ud504\ub85c\uc81d\ud2b8 QC \u2014 {file_info['filename']}")
+            self.top_bar.set_title(self.t("status.analysis_prefix", "\ud504\ub85c\uc81d\ud2b8 QC \u2014 {name}").format(name=file_info["filename"]))
 
     def _on_navigate_to_new_project(self):
         self._form.clear_form()
@@ -187,7 +191,7 @@ class MBESQCApp(GeoViewApp):
 
     def _on_project_saved(self, project_id: int):
         self.controller.project_created.emit(project_id)
-        self.controller.show_toast("\ud504\ub85c\uc81d\ud2b8\uac00 \uc800\uc7a5\ub418\uc5c8\uc2b5\ub2c8\ub2e4", "success")
+        self.controller.show_toast(self.t("toast.project_saved", "\ud504\ub85c\uc81d\ud2b8\uac00 \uc800\uc7a5\ub418\uc5c8\uc2b5\ub2c8\ub2e4"), "success")
         self._dashboard.refresh()
         self._switch_to("dashboard")
 
@@ -196,7 +200,7 @@ class MBESQCApp(GeoViewApp):
 
     def _on_upload_complete(self, project_id: int):
         self.controller.files_changed.emit(project_id)
-        self.controller.show_toast("\ud30c\uc77c \uc5c5\ub85c\ub4dc\uac00 \uc644\ub8cc\ub418\uc5c8\uc2b5\ub2c8\ub2e4", "success")
+        self.controller.show_toast(self.t("toast.upload_complete", "\ud30c\uc77c \uc5c5\ub85c\ub4dc\uac00 \uc644\ub8cc\ub418\uc5c8\uc2b5\ub2c8\ub2e4"), "success")
 
     def _on_files_changed(self, project_id: int):
         """Refresh project detail if currently viewing it."""
@@ -219,7 +223,7 @@ class MBESQCApp(GeoViewApp):
 
         if reply == QMessageBox.Yes:
             DataService.delete_project(project_id)
-            self.controller.show_toast("\ud504\ub85c\uc81d\ud2b8\uac00 \uc0ad\uc81c\ub418\uc5c8\uc2b5\ub2c8\ub2e4", "success")
+            self.controller.show_toast(self.t("toast.project_deleted", "\ud504\ub85c\uc81d\ud2b8\uac00 \uc0ad\uc81c\ub418\uc5c8\uc2b5\ub2c8\ub2e4"), "success")
             self._dashboard.refresh()
             self._switch_to("dashboard")
 
@@ -243,9 +247,9 @@ class MBESQCApp(GeoViewApp):
             }}
         """)
 
-        menu.addAction("Excel (.xlsx)", lambda: self._export_project(project_id, "excel"))
-        menu.addAction("Word (.docx)", lambda: self._export_project(project_id, "word"))
-        menu.addAction("PPT (.pptx)", lambda: self._export_project(project_id, "ppt"))
+        menu.addAction(self.t("menu.export.excel", "Excel (.xlsx)"), lambda: self._export_project(project_id, "excel"))
+        menu.addAction(self.t("menu.export.word", "Word (.docx)"), lambda: self._export_project(project_id, "word"))
+        menu.addAction(self.t("menu.export.ppt", "PPT (.pptx)"), lambda: self._export_project(project_id, "ppt"))
 
         btn = self.sender()
         if btn:
@@ -259,7 +263,7 @@ class MBESQCApp(GeoViewApp):
         latest_result = DataService.get_latest_project_result(project_id)
         if not latest_result:
             self.controller.show_toast(
-                "\uc644\ub8cc\ub41c QC \uc2a4\ub0c5\uc0f7\uc774 \uc5c6\uc5b4 export\ub97c \ub9cc\ub4e4 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4",
+                self.t("toast.export_preview_missing", "\uc644\ub8cc\ub41c QC \uc2a4\ub0c5\uc0f7\uc774 \uc5c6\uc5b4 export\ub97c \ub9cc\ub4e4 \uc218 \uc5c6\uc2b5\ub2c8\ub2e4"),
                 "warning",
             )
             return
@@ -267,16 +271,19 @@ class MBESQCApp(GeoViewApp):
         ext_map = {"excel": ".xlsx", "word": ".docx", "ppt": ".pptx"}
         ext = ext_map.get(fmt, ".xlsx")
         filter_map = {
-            "excel": "Excel (*.xlsx)",
-            "word": "Word (*.docx)",
-            "ppt": "PowerPoint (*.pptx)",
+            "excel": self.t("filefilter.excel", "Excel (*.xlsx)"),
+            "word": self.t("filefilter.word", "Word (*.docx)"),
+            "ppt": self.t("filefilter.ppt", "PowerPoint (*.pptx)"),
         }
 
         project = DataService.get_project(project_id)
-        default_name = f"MBESQC_Report_{project['name']}{ext}" if project else f"MBESQC_Report{ext}"
+        default_name = (
+            self.t("save.report.default", "MBESQC_Report_{project}").format(project=project["name"]) + ext
+            if project else self.t("save.report.default_fallback", "MBESQC_Report") + ext
+        )
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "보고서 저장", default_name, filter_map.get(fmt, ""))
+            self, self.t("dialog.export_save_title", "보고서 저장"), default_name, filter_map.get(fmt, ""))
         if not path:
             return
 
@@ -294,15 +301,15 @@ class MBESQCApp(GeoViewApp):
         self._export_worker.finished.connect(self._export_thread.quit)
         self._export_worker.error.connect(self._export_thread.quit)
 
-        self.controller.show_toast(f"{fmt.upper()} 보고서 생성 중...", "info")
+        self.controller.show_toast(self.t("toast.export_running", "{fmt} 보고서 생성 중...").format(fmt=fmt.upper()), "info")
         self._export_thread.start()
 
     def _on_export_done(self, path: str):
         self.controller.show_toast(
-            f"보고서 저장 완료: {os.path.basename(path)}", "success")
+            self.t("toast.export_saved", "보고서 저장 완료: {name}").format(name=os.path.basename(path)), "success")
 
     def _on_export_error(self, msg: str):
-        self.controller.show_toast(f"보고서 생성 실패: {msg}", "error")
+        self.controller.show_toast(self.t("toast.export_failed", "보고서 생성 실패: {error}").format(error=msg), "error")
 
     def _setup_shortcuts(self):
         QShortcut(QKeySequence("Ctrl+N"), self, self._on_navigate_to_new_project)
@@ -342,38 +349,69 @@ class MBESQCApp(GeoViewApp):
                 item.widget().deleteLater()
 
         if panel_id == "dashboard":
-            self.top_bar.add_action_button("+ \uc0c8 \ud504\ub85c\uc81d\ud2b8",
+            self.top_bar.add_action_button(self.t("action.new_project", "+ \uc0c8 \ud504\ub85c\uc81d\ud2b8"),
                                            self._on_navigate_to_new_project,
                                            primary=True)
 
         elif panel_id == "project_detail":
             pid = self._project_detail.get_project_id()
             if pid:
-                self.top_bar.add_action_button("Back",
+                self.top_bar.add_action_button(self.t("action.back", "Back"),
                     lambda p=pid: self._switch_to("dashboard"))
-                self.top_bar.add_action_button("Upload",
+                self.top_bar.add_action_button(self.t("action.upload", "Upload"),
                     lambda p=pid: self.controller.navigate_upload.emit(p))
-                self.top_bar.add_action_button("\ud504\ub85c\uc81d\ud2b8 QC",
+                self.top_bar.add_action_button(self.t("action.project_qc", "\ud504\ub85c\uc81d\ud2b8 QC"),
                     lambda: self._project_detail.run_batch_qc())
-                self.top_bar.add_action_button("Export",
+                self.top_bar.add_action_button(self.t("action.export", "Export"),
                     lambda p=pid: self._show_export_menu(p))
 
         elif panel_id == "upload":
             pid = getattr(self._upload, '_project_id', None)
             if pid:
-                self.top_bar.add_action_button("Back",
+                self.top_bar.add_action_button(self.t("action.back", "Back"),
                     lambda p=pid: self._on_navigate_to_project(p))
 
         elif panel_id == "analysis":
             pid = self._analysis.get_project_id()
             if pid:
-                self.top_bar.add_action_button("Back",
+                self.top_bar.add_action_button(self.t("action.back", "Back"),
                     lambda p=pid: self._on_navigate_to_project(p))
-                self.top_bar.add_action_button("Export",
+                self.top_bar.add_action_button(self.t("action.export", "Export"),
                     lambda p=pid: self._show_export_menu(p))
 
         elif panel_id == "form":
             pass  # Form has its own Cancel/Save buttons
+
+    def on_language_changed(self, lang: str, force: bool = False) -> None:
+        label_map = {
+            "dashboard": self.t("sidebar.dashboard", "대시보드"),
+            "project_detail": self.t("sidebar.project_detail", "프로젝트"),
+            "upload": self.t("sidebar.upload", "업로드"),
+            "analysis": self.t("sidebar.analysis", "분석"),
+            "dqr": self.t("sidebar.dqr", "DQR"),
+            "form": self.t("sidebar.form", "새 프로젝트"),
+        }
+        for btn in getattr(self.sidebar, "buttons", []):
+            btn.setText(label_map.get(btn.panel_id, btn.text()))
+        self.sidebar.set_static_text(
+            nav_header=self.t("sidebar.nav_header", "MENU"),
+            status_text=self.t("sidebar.ready", "Ready"),
+            separators=[self.t("sidebar.management", "관리")],
+        )
+
+        for panel, key, default in [
+            (self._dashboard, "panel.dashboard", "대시보드"),
+            (self._project_detail, "panel.project_detail", "프로젝트"),
+            (self._upload, "panel.upload", "업로드"),
+            (self._analysis, "panel.analysis", "분석"),
+            (self._dqr, "panel.dqr", "DQR"),
+            (self._form, "panel.form", "새 프로젝트"),
+        ]:
+            if hasattr(panel, "panel_title"):
+                panel.panel_title = self.t(key, default)
+
+        if getattr(self, "_current_panel", None):
+            self._switch_panel(self._current_panel)
 
 
 def main():

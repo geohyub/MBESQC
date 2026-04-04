@@ -431,16 +431,19 @@
                     <div class="row mb-3">
                         <div class="col-12">
                             <label class="form-label">
-                                <i class="ti ti-ruler-measure"></i> OffsetManager DB 경로
-                                <span class="text-muted ms-1" style="font-size:0.8em">(offsets.db)</span>
+                                <i class="ti ti-ruler-measure"></i> OffsetManager 연동
+                                <span class="text-muted ms-1" style="font-size:0.8em">(API 우선, 프로젝트에 저장된 DB 경로가 있을 때만 보조 사용)</span>
                             </label>
                             <div class="input-group">
                                 <input type="text" class="form-control" name="offset_db_path" id="offsetDbPath"
                                        value="{{ project.offset_db_path or '' }}"
-                                       placeholder="E:\Software\Preprocessing\OffsetManager\offsets.db">
+                                       placeholder="선택 사항: 프로젝트 전용 DB 경로">
                                 <button type="button" class="btn btn-outline-cyan" onclick="loadVesselConfigs()">
-                                    <i class="ti ti-refresh"></i> 불러오기
+                                    <i class="ti ti-refresh"></i> API 우선 불러오기
                                 </button>
+                            </div>
+                            <div class="form-text">
+                                기본적으로 OffsetManager API(포트 5302)를 먼저 사용합니다. 프로젝트에 저장된 DB 경로가 있을 때만, API가 실패한 경우에 한해 로컬 SQLite를 보조로 읽습니다.
                             </div>
                         </div>
                     </div>
@@ -449,13 +452,14 @@
                             <label class="form-label">
                                 <i class="ti ti-ship"></i> Vessel Configuration 선택
                             </label>
-                            <select class="form-select" name="offset_config_id" id="vesselConfigSelect">
+                            <select class="form-select" name="om_config_id" id="vesselConfigSelect">
                                 <option value="">-- 선택하세요 --</option>
                             </select>
                         </div>
                     </div>
                     <div id="sensorPreview" style="display:none" class="mb-3">
                         <label class="form-label"><i class="ti ti-list-details"></i> 센서 오프셋 미리보기</label>
+                        <div id="sensorProvenance" class="mb-2"></div>
                         <div class="table-responsive" style="max-height:200px;overflow-y:auto">
                             <table class="table table-sm table-hover" id="sensorTable">
                                 <thead><tr>
@@ -570,7 +574,7 @@ function renderVerificationDashboard(data) {
             <i class="ti ti-shield-check me-1"></i>HVF 교차검증
         </button>`;
     } else {
-        offsetHtml += '<div class="text-muted small mt-2"><i class="ti ti-info-circle me-1"></i>Add HVF or OffsetManager to enable cross-validation</div>';
+        offsetHtml += '<div class="text-muted small mt-2"><i class="ti ti-info-circle me-1"></i>HVF 또는 프로젝트에 저장된 OffsetManager 경로가 있어야 교차검증을 사용할 수 있습니다.</div>';
     }
     offsetHtml += '<div id="verify-result" class="mt-2"></div>';
     document.getElementById('verify-offsets').innerHTML = offsetHtml;
@@ -1177,6 +1181,8 @@ function verifyOffsets(pdsPath) {
             pds_path: pdsPath,
             hvf_dir: '{{ project.hvf_dir or "" }}',
             om_config_id: '{{ project.om_config_id or "" }}',
+            project_id: {{ project.id }},
+            offset_db_path: document.getElementById('offsetDbPath').value || '',
         })
     })
     .then(r => r.json())
@@ -1275,16 +1281,28 @@ function runProjectQc(projectId, fileIdx) {
 // ── OffsetManager 연동 ──
 function loadVesselConfigs() {
     const dbPath = document.getElementById('offsetDbPath').value;
-    if (!dbPath) { alert('OffsetManager DB 경로를 입력하세요.'); return; }
+    const projectId = {{ project.id }};
 
-    fetch('/api/om-configs?db_path=' + encodeURIComponent(dbPath))
+    const params = new URLSearchParams();
+    if (dbPath) {
+        params.set('db_path', dbPath);
+    }
+    params.set('project_id', projectId);
+
+    const url = '/api/om-configs?' + params.toString();
+
+    fetch(url)
     .then(r => r.json())
     .then(configs => {
+        if (!Array.isArray(configs)) {
+            alert((configs && (configs.detail || configs.error)) || 'OffsetManager 연결 정보를 불러오지 못했습니다. API 실행 상태나 프로젝트에 저장된 DB 경로를 확인해 주세요.');
+            return;
+        }
         const sel = document.getElementById('vesselConfigSelect');
         sel.innerHTML = '<option value="">-- 선택하세요 --</option>';
 
         if (configs.length === 0) {
-            sel.innerHTML += '<option disabled>DB에 설정이 없습니다</option>';
+            sel.innerHTML += '<option disabled>선택된 경로에 설정이 없습니다</option>';
         } else {
             configs.forEach(c => {
                 const opt = document.createElement('option');
@@ -1297,16 +1315,48 @@ function loadVesselConfigs() {
         document.getElementById('vesselConfigRow').style.display = '';
         sel.onchange = () => loadSensorPreview(sel.value, dbPath);
     })
-    .catch(e => alert('OffsetManager DB를 읽을 수 없습니다: ' + e));
+    .catch(e => alert('OffsetManager 연결 정보를 읽을 수 없습니다. API 실행 상태나 프로젝트에 저장된 DB 경로를 확인해 주세요.\n' + e));
 }
 
 function loadSensorPreview(configId, dbPath) {
-    if (!configId) { document.getElementById('sensorPreview').style.display = 'none'; return; }
+    if (!configId) {
+        document.getElementById('sensorPreview').style.display = 'none';
+        document.getElementById('sensorProvenance').innerHTML = '';
+        return;
+    }
+    const projectId = {{ project.id }};
 
-    fetch('/api/om-sensors/' + configId + '?db_path=' + encodeURIComponent(dbPath))
+    const params = new URLSearchParams();
+    if (dbPath) {
+        params.set('db_path', dbPath);
+    }
+    params.set('project_id', projectId);
+
+    const url = '/api/om-sensors/' + configId + '?' + params.toString();
+
+    fetch(url)
     .then(r => r.json())
     .then(data => {
-        if (data.error) { alert(data.error); return; }
+        if (data.error) {
+            document.getElementById('sensorProvenance').innerHTML = '';
+            alert(data.detail || data.error);
+            return;
+        }
+
+        const provenanceEl = document.getElementById('sensorProvenance');
+        if (provenanceEl) {
+            const modeLabel = data.mode === 'db-fallback' ? 'DB fallback' : 'API-first';
+            const modeClass = data.mode === 'db-fallback' ? 'bg-yellow' : 'bg-green';
+            const pathLine = data.path
+                ? `<div class="small text-muted mt-1">경로: <code>${data.path}</code>${data.exists ? '' : ' (존재하지 않음)'}</div>`
+                : '';
+            provenanceEl.innerHTML = `<div class="alert alert-secondary p-2 mb-2">
+                <strong>출처:</strong> ${data.source_label || data.source || 'unknown'}
+                <span class="badge ${modeClass} ms-1">${modeLabel}</span>
+                ${data.hint ? `<div class="small text-muted mt-1">${data.hint}</div>` : ''}
+                ${pathLine}
+            </div>`;
+        }
 
         const tbody = document.querySelector('#sensorTable tbody');
         tbody.innerHTML = '';

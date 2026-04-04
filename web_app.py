@@ -14,7 +14,6 @@ import sys
 import json
 import time
 import threading
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 
@@ -37,9 +36,121 @@ _projects: dict[int, dict] = {}
 _job_counter = 0
 _project_counter = 0
 _lock = threading.Lock()
+def _coerce_optional_int(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
-OM_DB_PATH = r"E:\Software\Preprocessing\OffsetManager\offsets.db"
 
+def _project_for_om_lookup(project_id: int | str | None = None) -> dict | None:
+    if project_id in (None, ""):
+        return None
+    try:
+        return _projects.get(int(project_id))
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_om_db_path(
+    db_path: str | None = None,
+    project_id: int | str | None = None,
+    project: dict | None = None,
+) -> Path | None:
+    """Resolve an explicit OffsetManager DB path, if one is configured.
+
+    Only request-local or project-saved paths are considered here. Hidden
+    environment fallback would make the legacy web boundary harder to reason
+    about, so the caller must opt in through project context or an explicit
+    request value.
+    """
+    if db_path:
+        explicit = Path(db_path).expanduser()
+        return explicit if explicit.exists() else None
+
+    if project is None:
+        project = _project_for_om_lookup(project_id)
+    if project:
+        project_path = project.get("offset_db_path") or project.get("offset_db")
+        if project_path:
+            resolved = Path(str(project_path)).expanduser()
+            return resolved if resolved.exists() else None
+
+    return None
+
+
+def _describe_om_resolution(
+    db_path: str | None = None,
+    project_id: int | str | None = None,
+    project: dict | None = None,
+) -> dict:
+    """Describe which OffsetManager source is currently usable."""
+    if db_path:
+        explicit = Path(db_path).expanduser()
+        return {
+            "source": "request",
+            "source_label": "요청 DB 경로",
+            "path": str(explicit),
+            "exists": explicit.exists(),
+            "mode": "db-fallback",
+            "hint": "요청에서 전달된 경로를 사용할 수 있습니다." if explicit.exists() else "요청 경로가 존재하지 않습니다.",
+        }
+
+    if project is None:
+        project = _project_for_om_lookup(project_id)
+    if project:
+        project_path = project.get("offset_db_path") or project.get("offset_db")
+        if project_path:
+            resolved = Path(str(project_path)).expanduser()
+            return {
+                "source": "project",
+                "source_label": "프로젝트 저장 DB 경로",
+                "path": str(resolved),
+                "exists": resolved.exists(),
+                "mode": "db-fallback",
+                "hint": "프로젝트에 저장된 OffsetManager 경로를 사용할 수 있습니다." if resolved.exists() else "프로젝트의 OffsetManager 경로가 존재하지 않습니다.",
+            }
+
+    return {
+        "source": "unresolved",
+        "source_label": "미해결",
+        "path": "",
+        "exists": False,
+        "mode": "api-first",
+        "hint": "OffsetManager API를 우선 사용합니다. 프로젝트에 저장된 DB 경로나 요청 경로가 없으면 로컬 SQLite fallback은 사용하지 않습니다.",
+    }
+
+
+def _describe_om_api_source() -> dict:
+    """Describe a successful API read from OffsetManager."""
+    return {
+        "source": "api",
+        "source_label": "OffsetManager API",
+        "path": "",
+        "exists": False,
+        "mode": "api-first",
+        "hint": "OffsetManager API 응답을 사용했습니다. 로컬 SQLite fallback은 사용하지 않았습니다.",
+    }
+
+
+def _normalize_om_detail(detail: dict) -> tuple[dict, list[dict]]:
+    config = detail.get("config", detail)
+    offsets = detail.get("offsets", detail.get("sensors", []))
+    return config, offsets
+
+
+def _normalize_om_project_fields(project: dict, data: dict) -> None:
+    """Keep OM-related project fields consistent across create/edit flows."""
+    if "om_config_id" in data or "offset_config_id" in data:
+        om_config_value = data.get("om_config_id", data.get("offset_config_id", ""))
+        project["om_config_id"] = _coerce_optional_int(om_config_value)
+        project["offset_config_id"] = project["om_config_id"]
+
+    if "offset_db_path" in data:
+        raw_path = data.get("offset_db_path", "")
+        project["offset_db_path"] = str(Path(raw_path).expanduser()) if raw_path else ""
 
 def _next_id(counter_name: str) -> int:
     global _job_counter, _project_counter
@@ -79,8 +190,11 @@ def new_project():
             "s7k_dir": data.get("s7k_dir", ""),
             "fau_dir": data.get("fau_dir", ""),
             "om_config_id": data.get("om_config_id", ""),
+            "offset_config_id": None,
+            "offset_db_path": "",
             "jobs": [],
         }
+        _normalize_om_project_fields(project, data)
 
         # Auto-scan PDS directory
         pds_dir = data.get("pds_dir", "")
@@ -141,15 +255,7 @@ def edit_project(project_id):
         project["s7k_dir"] = data["s7k_dir"]
     if "fau_dir" in data:
         project["fau_dir"] = data["fau_dir"]
-    if "om_config_id" in data:
-        project["om_config_id"] = data["om_config_id"]
-    if "offset_db_path" in data:
-        project["offset_db_path"] = data["offset_db_path"]
-    if "offset_config_id" in data:
-        try:
-            project["offset_config_id"] = int(data["offset_config_id"]) if data["offset_config_id"] else None
-        except (ValueError, TypeError):
-            project["offset_config_id"] = None
+    _normalize_om_project_fields(project, data)
 
     # Re-scan PDS files if dir changed
     if data.get("pds_dir") and Path(data["pds_dir"]).is_dir():
@@ -297,6 +403,8 @@ def api_verify_offsets():
         pds_path = data.get("pds_path", "")
         hvf_dir = data.get("hvf_dir", "")
         om_config_id = data.get("om_config_id", "")
+        project_id = data.get("project_id")
+        offset_db_path = data.get("offset_db_path")
 
         if not os.path.isfile(pds_path):
             return jsonify({"error": "PDS file not found"}), 400
@@ -342,6 +450,7 @@ def api_verify_offsets():
             "static_pitch": static_pitch,
             "hvf_comparison": None,
             "om_comparison": None,
+            "om_lookup": None,
             "issues": [],
         }
 
@@ -408,21 +517,50 @@ def api_verify_offsets():
 
         # Compare with OffsetManager if available
         if om_config_id:
+            om_lookup = _describe_om_resolution(offset_db_path, project_id=project_id)
+            result["om_lookup"] = om_lookup
             try:
-                import sqlite3
-                with sqlite3.connect(OM_DB_PATH) as conn:
-                    conn.row_factory = sqlite3.Row
-                    row = conn.execute(
-                        "SELECT * FROM vessel_configs WHERE id = ?", (om_config_id,)
-                    ).fetchone()
-                    if row:
-                        om_data = dict(row)
-                        result["om_comparison"] = {
-                            "vessel": om_data.get("vessel_name", ""),
-                            "project": om_data.get("project_name", ""),
-                        }
+                om_data, om_source = _load_om_config_detail(
+                    int(om_config_id),
+                    offset_db_path,
+                    project_id=project_id,
+                    return_source=True,
+                )
+                if om_data:
+                    config, _offsets = _normalize_om_detail(om_data)
+                    result["om_comparison"] = {
+                        "vessel": config.get("vessel_name", ""),
+                        "project": config.get("project_name", ""),
+                        "source": om_source.get("source", "unknown"),
+                        "mode": om_source.get("mode", "api-first"),
+                    }
+                    if om_lookup.get("source") not in (None, "", "unresolved"):
+                        result["om_comparison"]["fallback_source"] = om_lookup.get("source")
+                        result["om_comparison"]["fallback_mode"] = om_lookup.get("mode", "api-first")
+                else:
+                    lookup_path = om_lookup.get("path", "")
+                    lookup_hint = om_lookup.get("hint", "")
+                    if om_lookup.get("source") == "unresolved":
+                        message = "OffsetManager API를 우선 조회했지만, 프로젝트에 저장된 DB 경로가 없어 비교를 건너뛰었습니다."
+                        delta = lookup_hint or "프로젝트에 저장된 DB 경로 또는 요청 경로를 확인해 주세요."
+                    else:
+                        message = "OffsetManager 설정을 읽지 못했습니다. 프로젝트에 저장된 DB 경로 또는 API 연결 상태를 점검해 주세요."
+                        delta = lookup_path or lookup_hint or "DB 경로 확인 필요"
+                    result["issues"].append({
+                        "level": "WARN",
+                        "sensor": "OffsetManager",
+                        "message": message,
+                        "delta": delta,
+                    })
             except Exception:
-                pass
+                lookup_path = result["om_lookup"].get("path", "") if result["om_lookup"] else ""
+                lookup_hint = result["om_lookup"].get("hint", "") if result["om_lookup"] else ""
+                result["issues"].append({
+                    "level": "WARN",
+                    "sensor": "OffsetManager",
+                    "message": "OffsetManager 연동 중 예외가 발생했습니다. API 우선 흐름과 프로젝트에 저장된 DB 경로를 다시 확인해 주세요.",
+                    "delta": lookup_path or lookup_hint or "DB 경로 확인 필요",
+                })
 
         if not result["issues"]:
             result["issues"].append({"level": "PASS", "sensor": "All", "message": "No offset discrepancies found", "delta": ""})
@@ -954,31 +1092,35 @@ def api_crossline_compare():
 @app.route("/api/om-configs")
 def api_om_configs():
     """List OffsetManager vessel configs."""
-    return jsonify(_load_om_configs(OM_DB_PATH))
+    return jsonify(_load_om_configs(request.args.get("db_path"), request.args.get("project_id")))
 
 
 @app.route("/api/om-sensors/<int:config_id>")
 def api_om_sensors(config_id):
     """Get sensor offsets for a specific OffsetManager config."""
     try:
-        import sqlite3
-        conn = sqlite3.connect(OM_DB_PATH)
-        conn.row_factory = sqlite3.Row
+        detail_result = _load_om_config_detail(
+            config_id,
+            request.args.get("db_path"),
+            request.args.get("project_id"),
+            return_source=True,
+        )
+        detail, om_source = detail_result if detail_result else (None, _describe_om_resolution(
+            request.args.get("db_path"),
+            request.args.get("project_id"),
+        ))
+        if not detail:
+            resolution = _describe_om_resolution(
+                request.args.get("db_path"),
+                request.args.get("project_id"),
+            )
+            return jsonify({
+                "error": "Config not found",
+                "detail": resolution.get("hint") or "OffsetManager API와 프로젝트에 저장된 DB 경로를 모두 확인하지 못했습니다. 프로젝트의 OM 연결 상태를 점검해 주세요.",
+            }), 404
 
-        # Config info
-        config = conn.execute(
-            "SELECT * FROM vessel_configs WHERE id = ?", (config_id,)
-        ).fetchone()
-        if not config:
-            conn.close()
-            return jsonify({"error": "Config not found"}), 404
-
-        # All sensors for this config
-        sensors = conn.execute(
-            "SELECT * FROM sensor_offsets WHERE config_id = ? ORDER BY sensor_type, sensor_name",
-            (config_id,)
-        ).fetchall()
-        conn.close()  # Note: kept manual close here due to early return above
+        config, sensors = _normalize_om_detail(detail)
+        source_label = om_source.get("source_label", "OffsetManager API")
 
         # Sensor type Korean labels
         type_labels = {
@@ -994,32 +1136,63 @@ def api_om_sensors(config_id):
 
         result = {
             "config": {
-                "id": config["id"],
-                "vessel_name": config["vessel_name"],
-                "project_name": config["project_name"],
-                "config_date": config["config_date"],
-                "reference_point": config["reference_point"],
-                "description": config["description"],
+                "id": config.get("id"),
+                "vessel_name": config.get("vessel_name", ""),
+                "project_name": config.get("project_name", ""),
+                "config_date": config.get("config_date", ""),
+                "reference_point": config.get("reference_point", ""),
+                "description": config.get("description", ""),
             },
-            "sensors": [
-                {
-                    "id": s["id"],
-                    "name": s["sensor_name"],
-                    "type": s["sensor_type"],
-                    "type_ko": type_labels.get(s["sensor_type"], s["sensor_type"]),
-                    "x": s["x_offset"],
-                    "y": s["y_offset"],
-                    "z": s["z_offset"],
-                    "roll": s["roll_offset"],
-                    "pitch": s["pitch_offset"],
-                    "heading": s["heading_offset"],
-                    "latency": s["latency"],
-                    "notes": s["notes"] or "",
-                }
-                for s in sensors
-            ],
+            "sensors": [],
             "total": len(sensors),
+            "source": om_source.get("source", "unknown"),
+            "source_label": source_label,
+            "mode": om_source.get("mode", "api-first"),
+            "path": om_source.get("path", ""),
+            "exists": om_source.get("exists", False),
+            "hint": om_source.get("hint", ""),
         }
+
+        for s in sensors:
+            if isinstance(s, dict):
+                sensor_id = s.get("id")
+                sensor_name = s.get("sensor_name", s.get("name", ""))
+                sensor_type = s.get("sensor_type", s.get("type", ""))
+                x_offset = s.get("x_offset", s.get("x", 0))
+                y_offset = s.get("y_offset", s.get("y", 0))
+                z_offset = s.get("z_offset", s.get("z", 0))
+                roll_offset = s.get("roll_offset", s.get("roll", 0))
+                pitch_offset = s.get("pitch_offset", s.get("pitch", 0))
+                heading_offset = s.get("heading_offset", s.get("heading", 0))
+                latency = s.get("latency", 0)
+                notes = s.get("notes", "")
+            else:
+                sensor_id = getattr(s, "id", None)
+                sensor_name = getattr(s, "sensor_name", "")
+                sensor_type = getattr(s, "sensor_type", "")
+                x_offset = getattr(s, "x_offset", 0)
+                y_offset = getattr(s, "y_offset", 0)
+                z_offset = getattr(s, "z_offset", 0)
+                roll_offset = getattr(s, "roll_offset", 0)
+                pitch_offset = getattr(s, "pitch_offset", 0)
+                heading_offset = getattr(s, "heading_offset", 0)
+                latency = getattr(s, "latency", 0)
+                notes = getattr(s, "notes", "")
+
+            result["sensors"].append({
+                "id": sensor_id,
+                "name": sensor_name,
+                "type": sensor_type,
+                "type_ko": type_labels.get(sensor_type, sensor_type),
+                "x": float(x_offset or 0),
+                "y": float(y_offset or 0),
+                "z": float(z_offset or 0),
+                "roll": float(roll_offset or 0),
+                "pitch": float(pitch_offset or 0),
+                "heading": float(heading_offset or 0),
+                "latency": float(latency or 0),
+                "notes": notes or "",
+            })
 
         return jsonify(result)
 
@@ -1357,21 +1530,72 @@ def _serialize_result(result) -> dict:
 
 # ── Helpers ────────────────────────────────────────────────
 
-def _load_om_configs(db_path: str = None) -> list[dict]:
-    """Load OffsetManager vessel configs from given or default DB path."""
-    path = db_path or OM_DB_PATH
-    if not os.path.exists(path):
-        return []
+def _load_om_configs(db_path: str | None = None, project_id: int | str | None = None) -> list[dict]:
+    """Load OffsetManager vessel configs via API first, then explicit request/project DB fallback."""
     try:
-        conn = sqlite3.connect(path)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT id, vessel_name, project_name, config_date FROM vessel_configs ORDER BY updated_at DESC"
-        ).fetchall()
-        conn.close()
+        from desktop.services.om_client import OMClient
+        configs = OMClient.list_configs()
+        if configs:
+            return configs
+    except Exception:
+        pass
+
+    path = _resolve_om_db_path(db_path, project_id=project_id)
+    if not path:
+        return []
+
+    try:
+        import sqlite3
+        with sqlite3.connect(str(path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, vessel_name, project_name, config_date FROM vessel_configs ORDER BY updated_at DESC"
+            ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
+
+
+def _load_om_config_detail(
+    config_id: int,
+    db_path: str | None = None,
+    project_id: int | str | None = None,
+    return_source: bool = False,
+) -> dict | tuple[dict, dict] | None:
+    """Load one OffsetManager config payload via API first, then explicit request/project DB fallback."""
+    try:
+        from desktop.services.om_client import OMClient
+        detail = OMClient.get_config(int(config_id))
+        if detail:
+            return detail if not return_source else (detail, _describe_om_api_source())
+    except Exception:
+        pass
+
+    path = _resolve_om_db_path(db_path, project_id=project_id)
+    if not path:
+        return None if not return_source else (None, _describe_om_resolution(db_path, project_id=project_id))
+
+    try:
+        import sqlite3
+        with sqlite3.connect(str(path)) as conn:
+            conn.row_factory = sqlite3.Row
+            config = conn.execute(
+                "SELECT * FROM vessel_configs WHERE id = ?",
+                (int(config_id),)
+            ).fetchone()
+            if not config:
+                return None
+            sensors = conn.execute(
+                "SELECT * FROM sensor_offsets WHERE config_id = ? ORDER BY sensor_type, sensor_name",
+                (int(config_id),)
+            ).fetchall()
+        detail = {
+            "config": dict(config),
+            "offsets": [dict(s) for s in sensors],
+        }
+        return detail if not return_source else (detail, _describe_om_resolution(db_path, project_id=project_id))
+    except Exception:
+        return None if not return_source else (None, _describe_om_resolution(db_path, project_id=project_id))
 
 
 # ── Main ───────────────────────────────────────────────────

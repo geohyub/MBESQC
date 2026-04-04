@@ -78,6 +78,35 @@ def _load_om_offsets(db_path: str, config_id: int | None = None,
         return {}
 
 
+def _payload_to_offsets(om_payload: dict | None) -> dict[str, dict]:
+    """Normalize an OffsetManager API payload into the internal offsets map."""
+    if not isinstance(om_payload, dict):
+        return {}
+
+    sensors = om_payload.get("offsets", om_payload.get("sensors", []))
+    if not sensors and isinstance(om_payload.get("config"), dict):
+        sensors = om_payload["config"].get("offsets", om_payload["config"].get("sensors", []))
+
+    result: dict[str, dict] = {}
+    for s in sensors or []:
+        if not isinstance(s, dict):
+            continue
+        name = s.get("sensor_name", s.get("name", ""))
+        if not name:
+            continue
+        result[name] = {
+            "sensor_type": s.get("sensor_type", s.get("type", "")),
+            "x_offset": float(s.get("x_offset", s.get("x", 0)) or 0),
+            "y_offset": float(s.get("y_offset", s.get("y", 0)) or 0),
+            "z_offset": float(s.get("z_offset", s.get("z", 0)) or 0),
+            "roll_offset": float(s.get("roll_offset", s.get("roll", 0)) or 0),
+            "pitch_offset": float(s.get("pitch_offset", s.get("pitch", 0)) or 0),
+            "heading_offset": float(s.get("heading_offset", s.get("heading", 0)) or 0),
+            "latency": float(s.get("latency", 0) or 0),
+        }
+    return result
+
+
 def _match_sensor(pds_name: str, om_offsets: dict[str, dict]) -> str | None:
     """Find best matching OM sensor for a PDS sensor name."""
     pds_up = pds_name.upper()
@@ -123,6 +152,7 @@ def validate_offsets(
     lat_range: tuple[float, float] = (-90.0, 90.0),
     lon_range: tuple[float, float] = (-180.0, 180.0),
     om_offsets_dict: dict[str, dict] | None = None,
+    om_payload: dict | None = None,
 ) -> OffsetValidationResult:
     """Validate PDS sensor offsets against OffsetManager reference.
 
@@ -186,6 +216,8 @@ def validate_offsets(
     om_offsets = {}
     if om_offsets_dict:
         om_offsets = om_offsets_dict
+    elif om_payload:
+        om_offsets = _payload_to_offsets(om_payload)
     elif offsetmanager_db:
         om_offsets = _load_om_offsets(
             str(offsetmanager_db),

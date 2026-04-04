@@ -127,6 +127,36 @@ def _load_offsetmanager_offsets(
     return offsets
 
 
+def _payload_to_offsets(om_payload: dict | None) -> dict[str, dict]:
+    """Normalize an OffsetManager API payload into the internal offsets map."""
+    if not isinstance(om_payload, dict):
+        return {}
+
+    sensors = om_payload.get("offsets", om_payload.get("sensors", []))
+    if not sensors and isinstance(om_payload.get("config"), dict):
+        sensors = om_payload["config"].get("offsets", om_payload["config"].get("sensors", []))
+
+    offsets: dict[str, dict] = {}
+    for sensor in sensors or []:
+        if not isinstance(sensor, dict):
+            continue
+        name = sensor.get("sensor_name", sensor.get("name", ""))
+        if not name:
+            continue
+        offsets[name] = {
+            "type": sensor.get("sensor_type", sensor.get("type", "")),
+            "x": float(sensor.get("x_offset", sensor.get("x", 0)) or 0),
+            "y": float(sensor.get("y_offset", sensor.get("y", 0)) or 0),
+            "z": float(sensor.get("z_offset", sensor.get("z", 0)) or 0),
+            "roll": float(sensor.get("roll_offset", sensor.get("roll", 0)) or 0),
+            "pitch": float(sensor.get("pitch_offset", sensor.get("pitch", 0)) or 0),
+            "heading": float(sensor.get("heading_offset", sensor.get("heading", 0)) or 0),
+            "latency": float(sensor.get("latency", 0) or 0),
+        }
+
+    return offsets
+
+
 # ── Sensor Matching ────────────────────────────────────────────
 
 _SENSOR_TYPE_MAP = {
@@ -487,6 +517,7 @@ def validate_preprocess(
     offset_tolerance: float = 0.05,
     lat_range: tuple[float, float] = (-90.0, 90.0),
     lon_range: tuple[float, float] = (-180.0, 180.0),
+    om_payload: dict | None = None,
 ) -> PreProcessResult:
     """Run all pre-processing validation checks on a PDS file.
 
@@ -517,7 +548,22 @@ def validate_preprocess(
 
     # 2. Load OffsetManager data (if available)
     om_offsets = None
-    if offsetmanager_db:
+    if om_payload:
+        om_offsets = _payload_to_offsets(om_payload)
+        if om_offsets:
+            result.checks.append(CheckItem(
+                category="Reference", name="OffsetManager",
+                status="INFO",
+                pds_value=f"Loaded {len(om_offsets)} sensors from API payload",
+            ))
+        else:
+            result.checks.append(CheckItem(
+                category="Reference", name="OffsetManager",
+                status="WARNING",
+                pds_value="API payload에는 매칭되는 센서가 없습니다.",
+                suggestion=f"Check the OffsetManager payload for vessel '{vessel_name or meta.vessel_name}'.",
+            ))
+    elif offsetmanager_db:
         try:
             om_offsets = _load_offsetmanager_offsets(
                 str(offsetmanager_db),

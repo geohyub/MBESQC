@@ -23,7 +23,7 @@
 - **Desktop UI**: PySide6
 - **Charts**: PyQtGraph
 - **Legacy Web**: Flask 5103
-- **DB**: SQLite (mbesqc.db), OffsetManager offsets.db 직접 참조
+- **DB**: SQLite (mbesqc.db), OffsetManager는 API 우선 + 명시적 DB 경로 보조
 - **Export**: openpyxl, python-docx, reportlab
 
 ## Installation
@@ -44,7 +44,7 @@ python app.py
 
 ## Dependencies
 
-- OffsetManager: `offsets.db` 경로 설정 필요 (web_app.py `OM_DB_PATH`)
+- OffsetManager: API(포트 5302) 우선 사용, 필요 시 프로젝트/환경 변수의 명시적 DB 경로 설정
 
 ## License
 
