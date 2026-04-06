@@ -14,8 +14,10 @@ import sys
 import json
 import time
 import threading
+from io import BytesIO
 from datetime import datetime
 from pathlib import Path
+from typing import Literal, TypedDict
 
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, send_file
 
@@ -36,6 +38,30 @@ _projects: dict[int, dict] = {}
 _job_counter = 0
 _project_counter = 0
 _lock = threading.Lock()
+
+
+class OMResolution(TypedDict, total=False):
+    source: Literal["api", "request", "project", "unresolved"]
+    source_label: str
+    path: str
+    exists: bool
+    mode: Literal["api-first", "explicit-sqlite-fallback"]
+    fallback_scope: Literal["request", "project", "none"]
+    request_path_supplied: bool
+    request_fallback_enabled: bool
+    project_fallback_configured: bool
+    project_fallback_enabled: bool
+    hint: str
+    semantic_checks: list[dict]
+
+
+class OMProvenance(TypedDict, total=False):
+    decision: dict
+    fallback_candidate: dict
+    semantic: dict
+    resolution_chain: list[dict]
+
+
 def _coerce_optional_int(value) -> int | None:
     if value in (None, ""):
         return None
@@ -43,6 +69,14 @@ def _coerce_optional_int(value) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _flag_is_enabled(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value in (None, ""):
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _project_for_om_lookup(project_id: int | str | None = None) -> dict | None:
@@ -54,25 +88,343 @@ def _project_for_om_lookup(project_id: int | str | None = None) -> dict | None:
         return None
 
 
+def _normalize_om_text(value) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _project_sqlite_fallback_status(project: dict | None) -> dict:
+    """Inspect a project-stored OffsetManager DB path for semantic trust.
+
+    The legacy web path only trusts confirmed project DBs when the stored path
+    exists and the content still looks like the same project, not just any
+    SQLite file with a matching filename.
+    """
+    status = {
+        "configured": False,
+        "confirmed": False,
+        "enabled": False,
+        "path": "",
+        "path_exists": False,
+        "schema_ok": False,
+        "schema_version": None,
+        "record_count": 0,
+        "semantic_state": "unconfigured",
+        "semantic_hint": "OffsetManager API를 우선 사용합니다. 프로젝트에 저장된 DB 경로나 요청 경로가 없으면 명시적 SQLite fallback은 사용하지 않습니다.",
+        "stale_risk": False,
+        "latest_vessel_name": "",
+        "latest_project_name": "",
+        "latest_config_date": "",
+        "latest_updated_at": "",
+        "latest_review_state": "",
+        "project_vessel_match": None,
+        "project_name_match": None,
+        "semantic_checks": [],
+    }
+    if not project:
+        return status
+
+    project_path = project.get("offset_db_path") or project.get("offset_db")
+    if not project_path:
+        return status
+
+    status["configured"] = True
+    status["confirmed"] = _flag_is_enabled(project.get("offset_db_path_confirmed"))
+    path = Path(str(project_path)).expanduser()
+    status["path"] = str(path)
+    checks: list[dict] = []
+
+    def _append_check(name: str, passed: bool, detail: str, *, severity: str = "info", blocking: bool = False) -> None:
+        checks.append(
+            {
+                "name": name,
+                "passed": bool(passed),
+                "blocking": bool(blocking),
+                "severity": severity,
+                "detail": detail,
+            }
+        )
+
+    def _finalize(state: str, hint: str, *, enabled: bool = False) -> dict:
+        status["semantic_state"] = state
+        status["semantic_hint"] = hint
+        status["enabled"] = enabled
+        status["semantic_checks"] = checks
+        return status
+
+    if not path.exists():
+        _append_check(
+            "project_db_path_exists",
+            False,
+            "프로젝트에 저장된 OffsetManager DB 경로가 존재하지 않습니다.",
+            severity="error",
+            blocking=True,
+        )
+        return _finalize("missing", "프로젝트에 저장된 OffsetManager DB 경로가 존재하지 않습니다.")
+
+    status["path_exists"] = True
+    _append_check("project_db_path_exists", True, "프로젝트 저장 경로가 존재합니다.")
+    try:
+        import sqlite3
+
+        with sqlite3.connect(str(path)) as conn:
+            conn.row_factory = sqlite3.Row
+            try:
+                user_version_row = conn.execute("PRAGMA user_version").fetchone()
+                status["schema_version"] = int(user_version_row[0] or 0) if user_version_row else 0
+            except Exception:
+                status["schema_version"] = None
+
+            tables = {
+                row["name"]
+                for row in (
+                    conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+                )
+            }
+            required_tables = {"vessel_configs", "sensor_offsets"}
+            missing_tables = sorted(required_tables - tables)
+            if missing_tables:
+                _append_check(
+                    "required_tables_present",
+                    False,
+                    "프로젝트 저장 DB가 OffsetManager의 필수 테이블을 모두 포함하지 않습니다: "
+                    + ", ".join(missing_tables),
+                    severity="error",
+                    blocking=True,
+                )
+                return _finalize(
+                    "schema-risk",
+                    "프로젝트 저장 DB가 OffsetManager의 필수 테이블을 모두 포함하지 않습니다: "
+                    + ", ".join(missing_tables),
+                )
+            _append_check("required_tables_present", True, "필수 테이블(vessel_configs, sensor_offsets)이 존재합니다.")
+
+            vessel_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(vessel_configs)").fetchall()
+            }
+            required_vessel_columns = {"id", "vessel_name", "project_name", "config_date", "review_state", "updated_at"}
+            missing_vessel_columns = sorted(required_vessel_columns - vessel_columns)
+            if missing_vessel_columns:
+                _append_check(
+                    "vessel_configs_schema",
+                    False,
+                    "프로젝트 저장 DB의 vessel_configs 스키마가 기대값과 다릅니다: "
+                    + ", ".join(missing_vessel_columns),
+                    severity="error",
+                    blocking=True,
+                )
+                return _finalize(
+                    "schema-risk",
+                    "프로젝트 저장 DB의 vessel_configs 스키마가 기대값과 다릅니다: "
+                    + ", ".join(missing_vessel_columns),
+                )
+            _append_check("vessel_configs_schema", True, "vessel_configs 스키마가 기대값과 일치합니다.")
+
+            sensor_columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(sensor_offsets)").fetchall()
+            }
+            required_sensor_columns = {"config_id", "sensor_name", "sensor_type"}
+            missing_sensor_columns = sorted(required_sensor_columns - sensor_columns)
+            if missing_sensor_columns:
+                _append_check(
+                    "sensor_offsets_schema",
+                    False,
+                    "프로젝트 저장 DB의 sensor_offsets 스키마가 기대값과 다릅니다: "
+                    + ", ".join(missing_sensor_columns),
+                    severity="error",
+                    blocking=True,
+                )
+                return _finalize(
+                    "schema-risk",
+                    "프로젝트 저장 DB의 sensor_offsets 스키마가 기대값과 다릅니다: "
+                    + ", ".join(missing_sensor_columns),
+                )
+            _append_check("sensor_offsets_schema", True, "sensor_offsets 스키마가 기대값과 일치합니다.")
+
+            record_count = conn.execute("SELECT COUNT(*) FROM vessel_configs").fetchone()
+            status["record_count"] = int(record_count[0] or 0) if record_count else 0
+            if status["record_count"] == 0:
+                _append_check(
+                    "vessel_configs_has_records",
+                    False,
+                    "vessel_configs에 레코드가 없어 프로젝트 저장 DB가 오래되었거나 비어 있을 수 있습니다.",
+                    severity="error",
+                    blocking=True,
+                )
+                return _finalize(
+                    "empty",
+                    "vessel_configs에 레코드가 없어 프로젝트 저장 DB가 오래되었거나 비어 있을 수 있습니다.",
+                )
+            _append_check("vessel_configs_has_records", True, "vessel_configs에 레코드가 있습니다.")
+
+            status["schema_ok"] = True
+
+            latest = conn.execute(
+                """
+                SELECT id, vessel_name, project_name, config_date, updated_at, review_state
+                FROM vessel_configs
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if not latest:
+                _append_check(
+                    "latest_vessel_config_readable",
+                    False,
+                    "vessel_configs의 최신 레코드를 읽지 못했습니다. 오래된 DB일 수 있습니다.",
+                    severity="error",
+                    blocking=True,
+                )
+                return _finalize(
+                    "empty",
+                    "vessel_configs의 최신 레코드를 읽지 못했습니다. 오래된 DB일 수 있습니다.",
+                )
+            _append_check("latest_vessel_config_readable", True, "vessel_configs의 최신 레코드를 읽었습니다.")
+
+            status["latest_vessel_name"] = str(latest["vessel_name"] or "")
+            status["latest_project_name"] = str(latest["project_name"] or "")
+            status["latest_config_date"] = str(latest["config_date"] or "")
+            status["latest_updated_at"] = str(latest["updated_at"] or "")
+            status["latest_review_state"] = str(latest["review_state"] or "")
+
+            project_vessel = _normalize_om_text(project.get("vessel"))
+            project_name = _normalize_om_text(project.get("name"))
+            latest_vessel = _normalize_om_text(status["latest_vessel_name"])
+            latest_project = _normalize_om_text(status["latest_project_name"])
+
+            vessel_match = bool(project_vessel and latest_vessel and project_vessel == latest_vessel)
+            project_match = bool(project_name and latest_project and project_name == latest_project)
+            status["project_vessel_match"] = vessel_match if project_vessel else None
+            status["project_name_match"] = project_match if project_name else None
+            if project_vessel or project_name:
+                identity_match = vessel_match or project_match
+                _append_check(
+                    "project_identity_match",
+                    identity_match,
+                    (
+                        "프로젝트 메타데이터와 DB 최신 config가 일치합니다."
+                        if identity_match
+                        else (
+                            "프로젝트 메타데이터("
+                            + " / ".join([bit for bit in [project.get("name"), project.get("vessel")] if bit] or ["project metadata unavailable"])
+                            + ")와 DB 최신 config("
+                            + " / ".join([bit for bit in [status["latest_project_name"], status["latest_vessel_name"]] if bit] or ["latest config unavailable"])
+                            + ")가 일치하지 않습니다."
+                        )
+                    ),
+                    severity="error" if not identity_match else "info",
+                    blocking=not identity_match,
+                )
+
+            if (project_vessel or project_name) and not (vessel_match or project_match):
+                status["stale_risk"] = True
+                expected_bits = [bit for bit in [project.get("name"), project.get("vessel")] if bit]
+                latest_bits = [bit for bit in [status["latest_project_name"], status["latest_vessel_name"]] if bit]
+                return _finalize(
+                    "stale-risk",
+                    "프로젝트 메타데이터("
+                    + " / ".join(expected_bits or ["project metadata unavailable"])
+                    + ")와 DB 최신 config("
+                    + " / ".join(latest_bits or ["latest config unavailable"])
+                    + ")가 일치하지 않아 다른 프로젝트나 오래된 DB로 판단했습니다.",
+                )
+
+            review_state = _normalize_om_text(status["latest_review_state"])
+            review_state_ok = review_state in {"approved", "reviewed"}
+            if status["latest_review_state"]:
+                _append_check(
+                    "review_state_approved",
+                    review_state_ok,
+                    (
+                        "최신 config review_state가 승인/검토 상태입니다."
+                        if review_state_ok
+                        else f"최신 config review_state가 '{status['latest_review_state']}'라 fallback을 허용하지 않습니다."
+                    ),
+                    severity="error" if not review_state_ok else "info",
+                    blocking=not review_state_ok,
+                )
+            else:
+                _append_check(
+                    "review_state_approved",
+                    False,
+                    "최신 config review_state가 비어 있어 confirmed fallback을 허용하지 않습니다.",
+                    severity="error",
+                    blocking=True,
+                )
+                return _finalize(
+                    "review-risk",
+                    "최신 config review_state가 비어 있어 confirmed fallback을 허용하지 않습니다.",
+                )
+
+            if not review_state_ok:
+                return _finalize(
+                    "review-risk",
+                    f"최신 config review_state가 '{status['latest_review_state']}'라 confirmed fallback을 허용하지 않습니다.",
+                )
+
+            _append_check(
+                "fallback_confirmation",
+                status["confirmed"],
+                "프로젝트 저장 DB fallback 확인이 켜져 있습니다." if status["confirmed"] else "프로젝트 저장 DB fallback 확인이 꺼져 있습니다.",
+                severity="info" if status["confirmed"] else "error",
+                blocking=not status["confirmed"],
+            )
+            status["semantic_state"] = "verified"
+            status["semantic_hint"] = (
+                "프로젝트 메타데이터와 OffsetManager 최신 config가 일치합니다."
+                if (project_vessel or project_name)
+                else "OffsetManager DB 구조와 최신 config를 읽었습니다. 프로젝트 메타데이터가 비어 있어 identity 비교는 생략했습니다."
+            )
+            status["enabled"] = status["confirmed"]
+            status["semantic_checks"] = checks
+            return status
+    except Exception as exc:
+        status["semantic_state"] = "schema-risk"
+        status["semantic_hint"] = f"프로젝트 저장 DB를 검사하지 못했습니다: {exc}"
+        status["semantic_checks"] = checks + [
+            {
+                "name": "semantic_probe",
+                "passed": False,
+                "blocking": True,
+                "severity": "error",
+                "detail": f"프로젝트 저장 DB 검사 예외: {exc}",
+            }
+        ]
+        return status
+
+    return status
+
+
+def _project_sqlite_fallback_state(project: dict | None) -> tuple[bool, bool]:
+    """Return whether a project has a stored path and whether it is confirmed."""
+    status = _project_sqlite_fallback_status(project)
+    configured = bool(status["configured"])
+    enabled = configured and bool(status["enabled"])
+    return configured, enabled
+
+
 def _resolve_om_db_path(
     db_path: str | None = None,
     project_id: int | str | None = None,
     project: dict | None = None,
+    allow_request_path: bool = False,
 ) -> Path | None:
     """Resolve an explicit OffsetManager DB path, if one is configured.
 
-    Only request-local or project-saved paths are considered here. Hidden
-    environment fallback would make the legacy web boundary harder to reason
-    about, so the caller must opt in through project context or an explicit
-    request value.
+    Only request-local paths or explicitly confirmed project-saved paths are
+    considered here. Hidden environment fallback would make the legacy web
+    boundary harder to reason about, so the caller must opt in through a
+    request value or an explicit project confirmation flag.
     """
-    if db_path:
+    if db_path and allow_request_path:
         explicit = Path(db_path).expanduser()
         return explicit if explicit.exists() else None
 
     if project is None:
         project = _project_for_om_lookup(project_id)
-    if project:
+    project_status = _project_sqlite_fallback_status(project)
+    if project_status["configured"] and project_status["enabled"] and project:
         project_path = project.get("offset_db_path") or project.get("offset_db")
         if project_path:
             resolved = Path(str(project_path)).expanduser()
@@ -85,33 +437,145 @@ def _describe_om_resolution(
     db_path: str | None = None,
     project_id: int | str | None = None,
     project: dict | None = None,
-) -> dict:
+    allow_request_path: bool = False,
+) -> OMResolution:
     """Describe which OffsetManager source is currently usable."""
-    if db_path:
-        explicit = Path(db_path).expanduser()
+    request_supplied = bool(db_path)
+    explicit = Path(db_path).expanduser() if request_supplied else None
+    request_exists = bool(explicit and explicit.exists())
+    if project is None:
+        project = _project_for_om_lookup(project_id)
+    project_status = _project_sqlite_fallback_status(project)
+    project_configured = bool(project_status["configured"])
+    project_enabled = bool(project_status["enabled"])
+
+    if request_supplied and allow_request_path and request_exists:
         return {
             "source": "request",
             "source_label": "요청 DB 경로",
             "path": str(explicit),
             "exists": explicit.exists(),
-            "mode": "db-fallback",
-            "hint": "요청에서 전달된 경로를 사용할 수 있습니다." if explicit.exists() else "요청 경로가 존재하지 않습니다.",
+            "mode": "explicit-sqlite-fallback",
+            "fallback_scope": "request",
+            "request_path_supplied": True,
+            "request_fallback_enabled": True,
+            "project_fallback_configured": project_configured,
+            "project_fallback_enabled": project_enabled,
+            "semantic_state": project_status["semantic_state"],
+            "semantic_hint": project_status["semantic_hint"],
+            "semantic_checks": project_status["semantic_checks"],
+            "schema_version": project_status["schema_version"],
+            "latest_vessel_name": project_status["latest_vessel_name"],
+            "latest_project_name": project_status["latest_project_name"],
+            "latest_config_date": project_status["latest_config_date"],
+            "latest_updated_at": project_status["latest_updated_at"],
+            "latest_review_state": project_status["latest_review_state"],
+            "stale_risk": project_status["stale_risk"],
+            "schema_ok": project_status["schema_ok"],
+            "hint": "요청에서 전달된 SQLite 경로를 사용할 수 있습니다." if explicit.exists() else "요청 경로가 존재하지 않습니다.",
         }
 
-    if project is None:
-        project = _project_for_om_lookup(project_id)
-    if project:
+    if project_configured and project and project_enabled:
         project_path = project.get("offset_db_path") or project.get("offset_db")
         if project_path:
             resolved = Path(str(project_path)).expanduser()
+            request_note = ""
+            if request_supplied:
+                if allow_request_path and not request_exists:
+                    request_note = " 요청 DB 경로는 존재하지 않아 프로젝트 저장 DB 경로를 사용했습니다."
+                elif not allow_request_path:
+                    request_note = " 요청 DB 경로는 '명시적 SQLite fallback 사용'이 꺼져 있어 무시되었습니다."
             return {
                 "source": "project",
                 "source_label": "프로젝트 저장 DB 경로",
                 "path": str(resolved),
                 "exists": resolved.exists(),
-                "mode": "db-fallback",
-                "hint": "프로젝트에 저장된 OffsetManager 경로를 사용할 수 있습니다." if resolved.exists() else "프로젝트의 OffsetManager 경로가 존재하지 않습니다.",
+                "mode": "explicit-sqlite-fallback",
+                "fallback_scope": "project",
+                "request_path_supplied": request_supplied,
+                "request_fallback_enabled": allow_request_path,
+                "project_fallback_configured": project_configured,
+                "project_fallback_enabled": project_enabled,
+                "semantic_state": project_status["semantic_state"],
+                "semantic_hint": project_status["semantic_hint"],
+                "semantic_checks": project_status["semantic_checks"],
+                "schema_version": project_status["schema_version"],
+                "latest_vessel_name": project_status["latest_vessel_name"],
+                "latest_project_name": project_status["latest_project_name"],
+                "latest_config_date": project_status["latest_config_date"],
+                "latest_updated_at": project_status["latest_updated_at"],
+                "latest_review_state": project_status["latest_review_state"],
+                "stale_risk": project_status["stale_risk"],
+                "schema_ok": project_status["schema_ok"],
+                "hint": ("프로젝트에 저장된 SQLite 경로를 사용할 수 있습니다." if resolved.exists() else "프로젝트의 OffsetManager 경로가 존재하지 않습니다.") + request_note,
             }
+
+    if request_supplied:
+        assert explicit is not None
+        request_note = "요청 DB 경로가 존재하지 않습니다."
+        if not allow_request_path:
+            request_note = "요청 DB 경로가 전달됐지만 '명시적 SQLite fallback 사용'이 꺼져 있어 무시되었습니다."
+        if project_configured and not project_enabled:
+            request_note += " 프로젝트에 저장된 DB 경로가 있어도 명시적 프로젝트 fallback 확인이 꺼져 있어 사용하지 않았습니다."
+        return {
+            "source": "unresolved",
+            "source_label": "요청 DB 경로(미사용)",
+            "path": str(explicit),
+            "exists": request_exists,
+            "mode": "api-first",
+            "fallback_scope": "none",
+            "request_path_supplied": True,
+            "request_fallback_enabled": allow_request_path,
+            "project_fallback_configured": project_configured,
+            "project_fallback_enabled": project_enabled,
+            "semantic_state": project_status["semantic_state"],
+            "semantic_hint": project_status["semantic_hint"],
+            "semantic_checks": project_status["semantic_checks"],
+            "schema_version": project_status["schema_version"],
+            "latest_vessel_name": project_status["latest_vessel_name"],
+            "latest_project_name": project_status["latest_project_name"],
+            "latest_config_date": project_status["latest_config_date"],
+            "latest_updated_at": project_status["latest_updated_at"],
+            "latest_review_state": project_status["latest_review_state"],
+            "stale_risk": project_status["stale_risk"],
+            "schema_ok": project_status["schema_ok"],
+            "hint": request_note,
+        }
+
+    if project_configured and not project_enabled and project:
+        stored_path = project.get("offset_db_path") or project.get("offset_db") or ""
+        resolved = Path(str(stored_path)).expanduser() if stored_path else None
+        return {
+            "source": "unresolved",
+            "source_label": "프로젝트 저장 DB 경로(미사용)",
+            "path": str(resolved) if resolved else "",
+            "exists": bool(resolved and resolved.exists()),
+            "mode": "api-first",
+            "fallback_scope": "none",
+            "request_path_supplied": False,
+            "request_fallback_enabled": False,
+            "project_fallback_configured": True,
+            "project_fallback_enabled": False,
+            "semantic_state": project_status["semantic_state"],
+            "semantic_hint": project_status["semantic_hint"],
+            "semantic_checks": project_status["semantic_checks"],
+            "schema_version": project_status["schema_version"],
+            "latest_vessel_name": project_status["latest_vessel_name"],
+            "latest_project_name": project_status["latest_project_name"],
+            "latest_config_date": project_status["latest_config_date"],
+            "latest_updated_at": project_status["latest_updated_at"],
+            "latest_review_state": project_status["latest_review_state"],
+            "stale_risk": project_status["stale_risk"],
+            "schema_ok": project_status["schema_ok"],
+            "hint": (
+                (project_status["semantic_hint"] or "프로젝트에 저장된 SQLite 경로를 확인했습니다.")
+                + (
+                    " 프로젝트 저장 DB fallback 확인이 꺼져 있어 사용하지 않았습니다."
+                    if project_status["semantic_state"] == "verified"
+                    else ""
+                )
+            ),
+        }
 
     return {
         "source": "unresolved",
@@ -119,11 +583,27 @@ def _describe_om_resolution(
         "path": "",
         "exists": False,
         "mode": "api-first",
-        "hint": "OffsetManager API를 우선 사용합니다. 프로젝트에 저장된 DB 경로나 요청 경로가 없으면 로컬 SQLite fallback은 사용하지 않습니다.",
+        "fallback_scope": "none",
+        "request_path_supplied": False,
+        "request_fallback_enabled": False,
+        "project_fallback_configured": project_configured,
+        "project_fallback_enabled": project_enabled,
+        "semantic_state": project_status["semantic_state"],
+        "semantic_hint": project_status["semantic_hint"],
+        "semantic_checks": project_status["semantic_checks"],
+        "schema_version": project_status["schema_version"],
+        "latest_vessel_name": project_status["latest_vessel_name"],
+        "latest_project_name": project_status["latest_project_name"],
+        "latest_config_date": project_status["latest_config_date"],
+        "latest_updated_at": project_status["latest_updated_at"],
+        "latest_review_state": project_status["latest_review_state"],
+        "stale_risk": project_status["stale_risk"],
+        "schema_ok": project_status["schema_ok"],
+        "hint": project_status["semantic_hint"] or "OffsetManager API를 우선 사용합니다. 프로젝트에 저장된 DB 경로나 요청 경로가 없으면 명시적 SQLite fallback은 사용하지 않습니다.",
     }
 
 
-def _describe_om_api_source() -> dict:
+def _describe_om_api_source() -> OMResolution:
     """Describe a successful API read from OffsetManager."""
     return {
         "source": "api",
@@ -131,7 +611,90 @@ def _describe_om_api_source() -> dict:
         "path": "",
         "exists": False,
         "mode": "api-first",
-        "hint": "OffsetManager API 응답을 사용했습니다. 로컬 SQLite fallback은 사용하지 않았습니다.",
+        "fallback_scope": "none",
+        "request_path_supplied": False,
+        "request_fallback_enabled": False,
+        "hint": "OffsetManager API 응답을 사용했습니다. 명시적 SQLite fallback은 사용하지 않았습니다.",
+        "semantic_checks": [
+            {
+                "name": "api_available",
+                "passed": True,
+                "blocking": False,
+                "severity": "info",
+                "detail": "OffsetManager API 응답을 사용했습니다.",
+            }
+        ],
+    }
+
+
+def _snapshot_om_resolution(resolution: dict | None) -> dict:
+    """Return a stable machine-readable subset of an OM resolution payload."""
+    if not resolution:
+        return {}
+
+    fields = (
+        "source",
+        "source_label",
+        "path",
+        "exists",
+        "mode",
+        "fallback_scope",
+        "request_path_supplied",
+        "request_fallback_enabled",
+        "project_fallback_configured",
+        "project_fallback_enabled",
+        "semantic_state",
+        "semantic_hint",
+        "semantic_checks",
+        "schema_version",
+        "schema_ok",
+        "latest_vessel_name",
+        "latest_project_name",
+        "latest_config_date",
+        "latest_updated_at",
+        "latest_review_state",
+        "project_vessel_match",
+        "project_name_match",
+        "stale_risk",
+        "hint",
+    )
+    snapshot = {}
+    for field in fields:
+        if field in resolution:
+            snapshot[field] = resolution.get(field)
+    return snapshot
+
+
+def _build_om_provenance(
+    fallback_candidate: dict | None,
+    decision: dict | None = None,
+) -> OMProvenance:
+    """Compose a typed provenance envelope for machine-readable MBESQC responses."""
+    selected = decision or fallback_candidate or {}
+    fallback = fallback_candidate or {}
+    semantic_source = fallback if fallback else selected
+    return {
+        "decision": _snapshot_om_resolution(selected),
+        "fallback_candidate": _snapshot_om_resolution(fallback),
+        "semantic": {
+            "state": semantic_source.get("semantic_state", ""),
+            "hint": semantic_source.get("semantic_hint", semantic_source.get("hint", "")),
+            "checks": semantic_source.get("semantic_checks", []),
+            "schema_version": semantic_source.get("schema_version"),
+            "schema_ok": bool(semantic_source.get("schema_ok", False)),
+            "stale_risk": bool(semantic_source.get("stale_risk", False)),
+            "latest_vessel_name": semantic_source.get("latest_vessel_name", ""),
+            "latest_project_name": semantic_source.get("latest_project_name", ""),
+            "latest_config_date": semantic_source.get("latest_config_date", ""),
+            "latest_updated_at": semantic_source.get("latest_updated_at", ""),
+            "latest_review_state": semantic_source.get("latest_review_state", ""),
+            "project_vessel_match": semantic_source.get("project_vessel_match"),
+            "project_name_match": semantic_source.get("project_name_match"),
+        },
+        "resolution_chain": [
+            _snapshot_om_resolution(fallback),
+            _snapshot_om_resolution(selected),
+        ],
     }
 
 
@@ -150,7 +713,27 @@ def _normalize_om_project_fields(project: dict, data: dict) -> None:
 
     if "offset_db_path" in data:
         raw_path = data.get("offset_db_path", "")
+        previous_path = project.get("offset_db_path", "") or project.get("offset_db", "")
         project["offset_db_path"] = str(Path(raw_path).expanduser()) if raw_path else ""
+        if "offset_db_path_confirmed" in data:
+            project["offset_db_path_confirmed"] = _flag_is_enabled(data.get("offset_db_path_confirmed"))
+        elif project["offset_db_path"] != previous_path:
+            project["offset_db_path_confirmed"] = False
+
+    if "offset_db_path_confirmed" in data and "offset_db_path" not in data:
+        project["offset_db_path_confirmed"] = _flag_is_enabled(data.get("offset_db_path_confirmed"))
+
+
+def _enforce_project_db_confirmation(project: dict) -> dict:
+    """Clear confirmed fallback when the stored project DB fails semantic checks."""
+    status = _project_sqlite_fallback_status(project)
+    requested_confirmed = _flag_is_enabled(project.get("offset_db_path_confirmed"))
+    if requested_confirmed and (not status["configured"] or not status["enabled"]):
+        project["offset_db_path_confirmed"] = False
+    elif not status["configured"]:
+        project["offset_db_path_confirmed"] = False
+    return status
+
 
 def _next_id(counter_name: str) -> int:
     global _job_counter, _project_counter
@@ -215,7 +798,10 @@ def new_project():
                 "size_mb": f.stat().st_size / 1024 / 1024,
             })
 
+        project_status = _enforce_project_db_confirmation(project)
         _projects[proj_id] = project
+        if _flag_is_enabled(data.get("offset_db_path_confirmed")) and not project_status["enabled"]:
+            flash(project_status["semantic_hint"] or "프로젝트 저장 DB fallback 확인이 저장되지 않았습니다.", "warning")
         flash(f"Project '{project['name']}' created with {len(project['pds_files'])} PDS files.", "success")
         return redirect(url_for("view_project", project_id=proj_id))
 
@@ -256,6 +842,7 @@ def edit_project(project_id):
     if "fau_dir" in data:
         project["fau_dir"] = data["fau_dir"]
     _normalize_om_project_fields(project, data)
+    project_status = _enforce_project_db_confirmation(project)
 
     # Re-scan PDS files if dir changed
     if data.get("pds_dir") and Path(data["pds_dir"]).is_dir():
@@ -265,6 +852,8 @@ def edit_project(project_id):
             for p in pds_files
         ]
 
+    if _flag_is_enabled(data.get("offset_db_path_confirmed")) and not project_status["enabled"]:
+        flash(project_status["semantic_hint"] or "프로젝트 저장 DB fallback 확인이 저장되지 않았습니다.", "warning")
     flash("프로젝트가 수정되었습니다.", "success")
     return redirect(url_for("view_project", project_id=project_id))
 
@@ -405,6 +994,7 @@ def api_verify_offsets():
         om_config_id = data.get("om_config_id", "")
         project_id = data.get("project_id")
         offset_db_path = data.get("offset_db_path")
+        allow_request_path = _flag_is_enabled(data.get("allow_sqlite_fallback"))
 
         if not os.path.isfile(pds_path):
             return jsonify({"error": "PDS file not found"}), 400
@@ -451,6 +1041,7 @@ def api_verify_offsets():
             "hvf_comparison": None,
             "om_comparison": None,
             "om_lookup": None,
+            "provenance": {"om": None},
             "issues": [],
         }
 
@@ -517,40 +1108,101 @@ def api_verify_offsets():
 
         # Compare with OffsetManager if available
         if om_config_id:
-            om_lookup = _describe_om_resolution(offset_db_path, project_id=project_id)
+            om_lookup = _describe_om_resolution(
+                offset_db_path,
+                project_id=project_id,
+                allow_request_path=allow_request_path,
+            )
             result["om_lookup"] = om_lookup
+            om_provenance = _build_om_provenance(om_lookup, om_lookup)
+            result["provenance"]["om"] = om_provenance
             try:
                 om_data, om_source = _load_om_config_detail(
                     int(om_config_id),
                     offset_db_path,
                     project_id=project_id,
+                    allow_request_path=allow_request_path,
                     return_source=True,
                 )
+                om_provenance = _build_om_provenance(om_lookup, om_source)
+                result["provenance"]["om"] = om_provenance
+                comparison_source = om_source or {}
                 if om_data:
                     config, _offsets = _normalize_om_detail(om_data)
                     result["om_comparison"] = {
                         "vessel": config.get("vessel_name", ""),
                         "project": config.get("project_name", ""),
-                        "source": om_source.get("source", "unknown"),
-                        "mode": om_source.get("mode", "api-first"),
+                        "source": comparison_source.get("source", "unknown"),
+                        "mode": comparison_source.get("mode", "api-first"),
+                        "resolution": comparison_source,
+                        "provenance": om_provenance,
+                        "loaded": True,
+                        "semantic_state": om_provenance["semantic"]["state"],
+                        "semantic_hint": om_provenance["semantic"]["hint"],
+                        "semantic_checks": om_provenance["semantic"]["checks"],
+                        "schema_version": om_provenance["semantic"]["schema_version"],
+                        "schema_ok": om_provenance["semantic"]["schema_ok"],
+                        "stale_risk": om_provenance["semantic"]["stale_risk"],
+                        "latest_vessel_name": om_provenance["semantic"]["latest_vessel_name"],
+                        "latest_project_name": om_provenance["semantic"]["latest_project_name"],
+                        "latest_config_date": om_provenance["semantic"]["latest_config_date"],
+                        "latest_updated_at": om_provenance["semantic"]["latest_updated_at"],
+                        "latest_review_state": om_provenance["semantic"]["latest_review_state"],
                     }
-                    if om_lookup.get("source") not in (None, "", "unresolved"):
-                        result["om_comparison"]["fallback_source"] = om_lookup.get("source")
-                        result["om_comparison"]["fallback_mode"] = om_lookup.get("mode", "api-first")
+                    result["om_comparison"]["fallback_source"] = om_lookup.get("source", "unresolved")
+                    result["om_comparison"]["fallback_mode"] = om_lookup.get("mode", "api-first")
+                    result["om_comparison"]["fallback_resolution"] = om_lookup
                 else:
                     lookup_path = om_lookup.get("path", "")
                     lookup_hint = om_lookup.get("hint", "")
+                    semantic_state = om_lookup.get("semantic_state", "")
+                    semantic_hint = om_lookup.get("semantic_hint", "")
+                    result["om_comparison"] = {
+                        "vessel": "",
+                        "project": "",
+                        "source": comparison_source.get("source", "unknown"),
+                        "mode": comparison_source.get("mode", "api-first"),
+                        "resolution": comparison_source,
+                        "provenance": om_provenance,
+                        "loaded": False,
+                        "semantic_state": om_provenance["semantic"]["state"],
+                        "semantic_hint": om_provenance["semantic"]["hint"],
+                        "semantic_checks": om_provenance["semantic"]["checks"],
+                        "schema_version": om_provenance["semantic"]["schema_version"],
+                        "schema_ok": om_provenance["semantic"]["schema_ok"],
+                        "stale_risk": om_provenance["semantic"]["stale_risk"],
+                        "latest_vessel_name": om_provenance["semantic"]["latest_vessel_name"],
+                        "latest_project_name": om_provenance["semantic"]["latest_project_name"],
+                        "latest_config_date": om_provenance["semantic"]["latest_config_date"],
+                        "latest_updated_at": om_provenance["semantic"]["latest_updated_at"],
+                        "latest_review_state": om_provenance["semantic"]["latest_review_state"],
+                    }
+                    result["om_comparison"]["fallback_source"] = om_lookup.get("source", "unresolved")
+                    result["om_comparison"]["fallback_mode"] = om_lookup.get("mode", "api-first")
+                    result["om_comparison"]["fallback_resolution"] = om_lookup
                     if om_lookup.get("source") == "unresolved":
-                        message = "OffsetManager API를 우선 조회했지만, 프로젝트에 저장된 DB 경로가 없어 비교를 건너뛰었습니다."
-                        delta = lookup_hint or "프로젝트에 저장된 DB 경로 또는 요청 경로를 확인해 주세요."
+                        if semantic_state in {"stale-risk", "schema-risk", "missing", "empty"}:
+                            message = "프로젝트 저장 DB fallback이 semantic 검사에서 차단되어 비교를 건너뛰었습니다."
+                            delta = semantic_hint or lookup_hint or "프로젝트 저장 DB가 오래된 복사본이거나 스키마가 맞지 않을 수 있습니다."
+                        else:
+                            message = "OffsetManager API를 우선 조회했지만, 명시적 SQLite fallback이 비활성화되어 비교를 건너뛰었습니다."
+                            delta = lookup_hint or "프로젝트 저장 경로 또는 '명시적 SQLite fallback 사용' 체크 상태를 확인해 주세요."
                     else:
-                        message = "OffsetManager 설정을 읽지 못했습니다. 프로젝트에 저장된 DB 경로 또는 API 연결 상태를 점검해 주세요."
+                        message = "OffsetManager 설정을 읽지 못했습니다. API 연결 상태 또는 '명시적 SQLite fallback 사용' 체크 상태를 점검해 주세요."
                         delta = lookup_path or lookup_hint or "DB 경로 확인 필요"
                     result["issues"].append({
                         "level": "WARN",
                         "sensor": "OffsetManager",
                         "message": message,
                         "delta": delta,
+                        "provenance": {
+                            "source": om_provenance["decision"].get("source", "unknown"),
+                            "mode": om_provenance["decision"].get("mode", "api-first"),
+                            "fallback_scope": om_lookup.get("fallback_scope", "none"),
+                            "semantic_state": om_provenance["semantic"].get("state", ""),
+                            "request_fallback_enabled": om_provenance["decision"].get("request_fallback_enabled", False),
+                            "project_fallback_enabled": om_provenance["decision"].get("project_fallback_enabled", False),
+                        },
                     })
             except Exception:
                 lookup_path = result["om_lookup"].get("path", "") if result["om_lookup"] else ""
@@ -558,7 +1210,7 @@ def api_verify_offsets():
                 result["issues"].append({
                     "level": "WARN",
                     "sensor": "OffsetManager",
-                    "message": "OffsetManager 연동 중 예외가 발생했습니다. API 우선 흐름과 프로젝트에 저장된 DB 경로를 다시 확인해 주세요.",
+                    "message": "OffsetManager 연동 중 예외가 발생했습니다. API 우선 흐름과 '명시적 SQLite fallback 사용' 체크 상태를 다시 확인해 주세요.",
                     "delta": lookup_path or lookup_hint or "DB 경로 확인 필요",
                 })
 
@@ -1092,31 +1744,50 @@ def api_crossline_compare():
 @app.route("/api/om-configs")
 def api_om_configs():
     """List OffsetManager vessel configs."""
-    return jsonify(_load_om_configs(request.args.get("db_path"), request.args.get("project_id")))
+    include_provenance = request.args.get("include_provenance", "").lower() in {"1", "true", "yes"}
+    allow_request_path = _flag_is_enabled(request.args.get("allow_sqlite_fallback"))
+    configs_result = _load_om_configs(
+        request.args.get("db_path"),
+        request.args.get("project_id"),
+        allow_request_path=allow_request_path,
+        return_source=include_provenance,
+    )
+    if include_provenance:
+        configs, provenance = configs_result
+        return jsonify({
+            "configs": configs,
+            "count": len(configs),
+            "provenance": provenance,
+        })
+    return jsonify(configs_result)
 
 
 @app.route("/api/om-sensors/<int:config_id>")
 def api_om_sensors(config_id):
     """Get sensor offsets for a specific OffsetManager config."""
     try:
+        allow_request_path = _flag_is_enabled(request.args.get("allow_sqlite_fallback"))
         detail_result = _load_om_config_detail(
             config_id,
             request.args.get("db_path"),
             request.args.get("project_id"),
+            allow_request_path=allow_request_path,
             return_source=True,
         )
         detail, om_source = detail_result if detail_result else (None, _describe_om_resolution(
             request.args.get("db_path"),
             request.args.get("project_id"),
+            allow_request_path=allow_request_path,
         ))
         if not detail:
             resolution = _describe_om_resolution(
                 request.args.get("db_path"),
                 request.args.get("project_id"),
+                allow_request_path=allow_request_path,
             )
             return jsonify({
                 "error": "Config not found",
-                "detail": resolution.get("hint") or "OffsetManager API와 프로젝트에 저장된 DB 경로를 모두 확인하지 못했습니다. 프로젝트의 OM 연결 상태를 점검해 주세요.",
+                "detail": resolution.get("hint") or "OffsetManager API와 명시적 SQLite fallback 경로를 모두 확인하지 못했습니다. 프로젝트의 OM 연결 상태와 '명시적 SQLite fallback 사용' 체크 상태를 점검해 주세요.",
             }), 404
 
         config, sensors = _normalize_om_detail(detail)
@@ -1151,6 +1822,10 @@ def api_om_sensors(config_id):
             "path": om_source.get("path", ""),
             "exists": om_source.get("exists", False),
             "hint": om_source.get("hint", ""),
+            "resolution": om_source,
+            "provenance": {
+                "om": _build_om_provenance(om_source, om_source),
+            },
         }
 
         for s in sensors:
@@ -1325,18 +2000,41 @@ def api_status(job_id):
     job = _jobs.get(job_id)
     if not job:
         return jsonify({"error": "Job not found"}), 404
-    return jsonify({
+    result = job.get("result") if job.get("status") == "done" else None
+    provenance_summary = _extract_job_provenance_summary(result)
+    provenance_manifest = _extract_job_provenance_manifest(result)
+    response = {
         "id": job_id,
         "status": job["status"],
         "progress": job.get("progress", ""),
-    })
+    }
+    if provenance_summary:
+        response["provenance_summary"] = provenance_summary
+    if provenance_manifest:
+        response["provenance_manifest"] = provenance_manifest
+    return jsonify(response)
 
 
 @app.route("/api/download/<int:job_id>/<fmt>")
 def api_download(job_id, fmt):
     """Download generated report."""
     job = _jobs.get(job_id)
-    if not job or not job.get("output_dir"):
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+
+    if fmt == "json":
+        payload = _build_job_download_payload(job)
+        if not payload:
+            return jsonify({"error": "Not found"}), 404
+        data = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        return send_file(
+            BytesIO(data),
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=f"QC_Result_{job_id}.json",
+        )
+
+    if not job.get("output_dir"):
         return jsonify({"error": "Not found"}), 404
 
     out = Path(job["output_dir"])
@@ -1525,24 +2223,106 @@ def _serialize_result(result) -> dict:
     if hasattr(result, 'tide_records'):
         d["tide_records"] = int(result.tide_records)
 
+    offset_validation = getattr(result, "offset_validation", None)
+    om_provenance = None
+    if offset_validation is not None:
+        provenance = getattr(offset_validation, "provenance", None) or {}
+        if isinstance(provenance, dict):
+            om_provenance = provenance.get("om")
+        if isinstance(om_provenance, dict):
+            d["offset_validation"] = {
+                "overall": getattr(offset_validation, "overall", ""),
+                "provenance": {"om": om_provenance},
+            }
+            d["provenance"] = {"om": om_provenance}
+            d["provenance_summary"] = _extract_job_provenance_summary(d)
+            provenance_manifest = _extract_job_provenance_manifest(d)
+            if provenance_manifest:
+                d["provenance_manifest"] = provenance_manifest
+
     return d
+
+
+# ── Provenance helpers ────────────────────────────────────
+
+def _extract_job_provenance_summary(result: dict | None) -> dict:
+    """Return the compact provenance summary for a serialized QC job payload."""
+    payload = result if isinstance(result, dict) else {}
+    stored_summary = payload.get("provenance_summary")
+    if isinstance(stored_summary, dict):
+        return stored_summary
+    try:
+        from desktop.services.data_service import DataService
+
+        return DataService.extract_provenance_summary(payload)
+    except Exception:
+        return {}
+
+
+def _extract_job_provenance_manifest(result: dict | None) -> dict:
+    """Return the compact provenance manifest for a serialized QC job payload."""
+    payload = result if isinstance(result, dict) else {}
+    stored_manifest = payload.get("provenance_manifest")
+    if isinstance(stored_manifest, dict):
+        return stored_manifest
+    try:
+        from desktop.services.data_service import DataService
+
+        return DataService.extract_provenance_manifest(payload)
+    except Exception:
+        return {}
+
+
+def _build_job_download_payload(job: dict | None) -> dict:
+    """Return a machine-readable QC snapshot for JSON downloads."""
+    if not isinstance(job, dict):
+        return {}
+
+    payload = job.get("result")
+    if not isinstance(payload, dict):
+        try:
+            payload = json.loads(payload or "{}")
+        except (TypeError, json.JSONDecodeError):
+            payload = {}
+
+    if not payload:
+        return {}
+
+    payload = dict(payload)
+    provenance_summary = payload.get("provenance_summary") or _extract_job_provenance_summary(payload)
+    if provenance_summary:
+        payload["provenance_summary"] = provenance_summary
+    provenance_manifest = payload.get("provenance_manifest") or _extract_job_provenance_manifest(payload)
+    if provenance_manifest:
+        payload["provenance_manifest"] = provenance_manifest
+    return payload
 
 
 # ── Helpers ────────────────────────────────────────────────
 
-def _load_om_configs(db_path: str | None = None, project_id: int | str | None = None) -> list[dict]:
-    """Load OffsetManager vessel configs via API first, then explicit request/project DB fallback."""
+def _load_om_configs(
+    db_path: str | None = None,
+    project_id: int | str | None = None,
+    allow_request_path: bool = False,
+    return_source: bool = False,
+) -> list[dict] | tuple[list[dict], OMResolution]:
+    """Load OffsetManager vessel configs via API first, then confirmed project SQLite fallback."""
     try:
         from desktop.services.om_client import OMClient
         configs = OMClient.list_configs()
         if configs:
-            return configs
+            return (configs, _describe_om_api_source()) if return_source else configs
     except Exception:
         pass
 
-    path = _resolve_om_db_path(db_path, project_id=project_id)
+    path = _resolve_om_db_path(db_path, project_id=project_id, allow_request_path=allow_request_path)
     if not path:
-        return []
+        resolution = _describe_om_resolution(
+            db_path,
+            project_id=project_id,
+            allow_request_path=allow_request_path,
+        )
+        return ([], resolution) if return_source else []
 
     try:
         import sqlite3
@@ -1551,18 +2331,30 @@ def _load_om_configs(db_path: str | None = None, project_id: int | str | None = 
             rows = conn.execute(
                 "SELECT id, vessel_name, project_name, config_date FROM vessel_configs ORDER BY updated_at DESC"
             ).fetchall()
-        return [dict(r) for r in rows]
+        configs = [dict(r) for r in rows]
+        resolution = _describe_om_resolution(
+            db_path,
+            project_id=project_id,
+            allow_request_path=allow_request_path,
+        )
+        return (configs, resolution) if return_source else configs
     except Exception:
-        return []
+        resolution = _describe_om_resolution(
+            db_path,
+            project_id=project_id,
+            allow_request_path=allow_request_path,
+        )
+        return ([], resolution) if return_source else []
 
 
 def _load_om_config_detail(
     config_id: int,
     db_path: str | None = None,
     project_id: int | str | None = None,
+    allow_request_path: bool = False,
     return_source: bool = False,
 ) -> dict | tuple[dict, dict] | None:
-    """Load one OffsetManager config payload via API first, then explicit request/project DB fallback."""
+    """Load one OffsetManager config payload via API first, then confirmed project SQLite fallback."""
     try:
         from desktop.services.om_client import OMClient
         detail = OMClient.get_config(int(config_id))
@@ -1571,9 +2363,16 @@ def _load_om_config_detail(
     except Exception:
         pass
 
-    path = _resolve_om_db_path(db_path, project_id=project_id)
+    path = _resolve_om_db_path(db_path, project_id=project_id, allow_request_path=allow_request_path)
     if not path:
-        return None if not return_source else (None, _describe_om_resolution(db_path, project_id=project_id))
+        return None if not return_source else (
+            None,
+            _describe_om_resolution(
+                db_path,
+                project_id=project_id,
+                allow_request_path=allow_request_path,
+            ),
+        )
 
     try:
         import sqlite3
@@ -1593,9 +2392,23 @@ def _load_om_config_detail(
             "config": dict(config),
             "offsets": [dict(s) for s in sensors],
         }
-        return detail if not return_source else (detail, _describe_om_resolution(db_path, project_id=project_id))
+        return detail if not return_source else (
+            detail,
+            _describe_om_resolution(
+                db_path,
+                project_id=project_id,
+                allow_request_path=allow_request_path,
+            ),
+        )
     except Exception:
-        return None if not return_source else (None, _describe_om_resolution(db_path, project_id=project_id))
+        return None if not return_source else (
+            None,
+            _describe_om_resolution(
+                db_path,
+                project_id=project_id,
+                allow_request_path=allow_request_path,
+            ),
+        )
 
 
 # ── Main ───────────────────────────────────────────────────

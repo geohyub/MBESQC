@@ -221,9 +221,20 @@ def serialize_full_qc_result(result) -> dict:
                      "detail": getattr(c, "detail", "")}
                     for c in data_checks
                 ]
+            provenance = getattr(ov, "provenance", {}) or {}
+            if provenance:
+                ov_data["provenance"] = provenance
+                d["provenance"] = {"om": provenance.get("om", {})}
             d["offset_validation"] = ov_data
         except Exception:
             pass
+
+    provenance_summary = DataService.extract_provenance_summary(d)
+    if provenance_summary.get("has_data"):
+        d["provenance_summary"] = provenance_summary
+        provenance_manifest = DataService.extract_provenance_manifest(d)
+        if provenance_manifest:
+            d["provenance_manifest"] = provenance_manifest
 
     # Motion QC
     mq = getattr(result, "motion_qc", None)

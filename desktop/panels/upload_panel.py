@@ -19,7 +19,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QThread, Slot
 from geoview_pyside6.constants import Dark, Font, Space, Radius
 
 from desktop.services.data_service import DataService
-from desktop.widgets.drop_zone import DropZone
+from geoview_pyside6.widgets import FileDropZone
 
 
 class _ScanWorker(QObject):
@@ -95,7 +95,11 @@ class UploadPanel(QWidget):
         layout.addWidget(self._project_label)
 
         # Drop zone
-        self._drop_zone = DropZone()
+        self._drop_zone = FileDropZone(
+            accepted_extensions={".pds", ".gsf", ".hvf", ".s7k", ".xtf", ".fau", ".gpt", ".csv"},
+            title="PDS/GSF/HVF 파일을 여기에 드래그하거나",
+            icon_name="upload",
+        )
         self._drop_zone.files_dropped.connect(self._on_files_dropped)
         layout.addWidget(self._drop_zone)
 

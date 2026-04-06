@@ -41,6 +41,30 @@ setTimeout(() => location.reload(), 2000);
 {% elif job.status == 'done' and job.result %}
 {% set r = job.result %}
 
+{% if r.provenance_summary and r.provenance_summary.has_data %}
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="subheader">Persisted provenance</div>
+        <div class="h3 mb-1">{{ r.provenance_summary.source or 'unknown' }} / {{ r.provenance_summary.semantic_state or 'unspecified' }}</div>
+        <div class="small text-muted">
+            checks {{ r.provenance_summary.semantic_checks_passed }}/{{ r.provenance_summary.semantic_checks_total }}
+            {% if r.provenance_summary.path %} | {{ r.provenance_summary.path }}{% endif %}
+        </div>
+        {% if r.provenance_summary.semantic_hint %}
+        <div class="small text-muted mt-1">{{ r.provenance_summary.semantic_hint }}</div>
+        {% endif %}
+    </div>
+</div>
+<script type="application/json" id="provenance-summary-{{ job.id }}">
+{{ r.provenance_summary | tojson }}
+</script>
+{% if r.provenance_manifest %}
+<script type="application/json" id="provenance-manifest-{{ job.id }}">
+{{ r.provenance_manifest | tojson }}
+</script>
+{% endif %}
+{% endif %}
+
 <!-- KPI Cards -->
 <div class="row row-deck row-cards mb-4">
     <div class="col-sm-6 col-lg-3">

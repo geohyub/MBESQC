@@ -25,6 +25,123 @@ from desktop.services.insight_service import (
 )
 
 
+def _extract_export_provenance(latest_data: dict | None) -> dict:
+    """Pull the persisted provenance payload back out for report surfaces."""
+    data = latest_data if isinstance(latest_data, dict) else {}
+    summary = data.get("provenance_summary")
+    if not isinstance(summary, dict):
+        summary = DataService.extract_provenance_summary(data)
+
+    manifest = data.get("provenance_manifest")
+    if not isinstance(manifest, dict):
+        manifest = DataService.extract_provenance_manifest(data)
+
+    raw = {}
+
+    offset_validation = data.get("offset_validation") or {}
+    if isinstance(offset_validation, dict):
+        raw = offset_validation.get("provenance") or {}
+
+    if not raw:
+        raw = data.get("provenance") or {}
+
+    if not isinstance(raw, dict):
+        raw = {}
+
+    om = raw.get("om") or {}
+    if not isinstance(om, dict):
+        om = {}
+
+    semantic = om.get("semantic") or {}
+    if not isinstance(semantic, dict):
+        semantic = {}
+
+    semantic_checks = semantic.get("checks") or []
+    if not isinstance(semantic_checks, list):
+        semantic_checks = []
+
+    decision = om.get("decision") or {}
+    if not isinstance(decision, dict):
+        decision = {}
+
+    resolution_chain = om.get("resolution_chain") or raw.get("resolution_chain") or []
+    if not isinstance(resolution_chain, list):
+        resolution_chain = []
+
+    return {
+        "raw": raw,
+        "summary": summary,
+        "om": om,
+        "decision": decision,
+        "semantic": semantic,
+        "semantic_checks": semantic_checks,
+        "resolution_chain": resolution_chain,
+        "manifest": manifest,
+        "has_data": bool(summary.get("has_data") or raw or semantic_checks),
+    }
+
+
+def _format_provenance_summary_value(summary: dict) -> str:
+    source = summary.get("source") or "unknown"
+    state = summary.get("semantic_state") or "unspecified"
+    checks_total = int(summary.get("semantic_checks_total") or 0)
+    checks_passed = int(summary.get("semantic_checks_passed") or 0)
+    bits = [source, state]
+    if checks_total:
+        bits.append(f"checks {checks_passed}/{checks_total}")
+    fallback_scope = summary.get("fallback_scope") or ""
+    if fallback_scope:
+        bits.append(f"scope {fallback_scope}")
+    return " / ".join(bits)
+
+
+def _format_export_provenance_lines(provenance: dict) -> list[str]:
+    lines: list[str] = []
+    summary = provenance.get("summary") or {}
+    decision = provenance.get("decision") or {}
+    semantic = provenance.get("semantic") or {}
+    semantic_checks = provenance.get("semantic_checks") or []
+    resolution_chain = provenance.get("resolution_chain") or []
+
+    if summary.get("has_data"):
+        lines.append("Persisted provenance summary: " + _format_provenance_summary_value(summary))
+
+    source = decision.get("source") or "unknown"
+    path = decision.get("path") or ""
+    if source != "unknown" or path:
+        decision_bits = [f"OffsetManager source: {source}"]
+        if path:
+            decision_bits.append(f"path {path}")
+        lines.append(" | ".join(decision_bits))
+
+    state = semantic.get("state") or ""
+    hint = semantic.get("hint") or ""
+    if state:
+        lines.append(f"Semantic state: {state}")
+    if hint:
+        lines.append(f"Semantic hint: {hint}")
+
+    if semantic_checks:
+        passed = sum(1 for check in semantic_checks if check.get("passed"))
+        lines.append(f"Semantic checks: {passed}/{len(semantic_checks)} passed")
+        for check in semantic_checks[:4]:
+            status = "PASS" if check.get("passed") else "FAIL"
+            name = check.get("name") or "check"
+            detail = check.get("detail") or ""
+            line = f"{name} [{status}]"
+            if detail:
+                line += f": {detail}"
+            lines.append(line)
+
+    if resolution_chain:
+        lines.append(f"Resolution chain steps: {len(resolution_chain)}")
+
+    if not lines:
+        lines.append("No persisted provenance payload was available in the exported snapshot.")
+
+    return lines
+
+
 class ExportWorker(QObject):
     """Background worker for report generation."""
 
@@ -69,7 +186,7 @@ class ExportWorker(QObject):
 
         latest = max(done_results, key=lambda r: r.get("finished_at") or "")
         try:
-            latest_data = json.loads(latest.get("result_json") or "{}")
+            latest_data = latest.get("result_payload") or json.loads(latest.get("result_json") or "{}")
         except (TypeError, json.JSONDecodeError):
             latest_data = {}
 
@@ -87,6 +204,7 @@ class ExportWorker(QObject):
         history_story = build_history_story(done_results)
         run_diff = build_run_diff(done_results)
         settings = build_settings_assistant(project, latest_data, file_counts)
+        provenance = _extract_export_provenance(latest_data)
         history_rows = []
         for result in done_results:
             anchor_file = DataService.get_file(result.get("file_id", 0)) if result.get("file_id") else None
@@ -100,7 +218,7 @@ class ExportWorker(QObject):
         return (
             project, results, done_results, latest, latest_data,
             context, overview, module_rows, history_rows, issue_spotlight, action_items, history_story,
-            run_diff, settings,
+            run_diff, settings, provenance,
         )
 
     def _export_excel(self):
@@ -112,7 +230,7 @@ class ExportWorker(QObject):
         (
             project, results, done_results, latest, data,
             context, overview, module_rows, history_rows, issue_spotlight, action_items, history_story,
-            run_diff, settings,
+            run_diff, settings, provenance,
         ) = self._load_export_context()
 
         wb = openpyxl.Workbook()
@@ -248,6 +366,78 @@ class ExportWorker(QObject):
             for col, width in {"A": 18, "B": 10, "C": 28, "D": 48, "E": 42}.items():
                 ws_findings.column_dimensions[col].width = width
 
+        if provenance.get("has_data"):
+            ws_prov = wb.create_sheet("Provenance")
+            ws_prov.merge_cells("A1:E1")
+            ws_prov["A1"] = "QC Provenance"
+            ws_prov["A1"].font = title_font
+            ws_prov["A2"] = "Persisted OffsetManager provenance and semantic checks from the latest completed QC snapshot."
+            ws_prov["A2"].font = XlFont(name="Pretendard", size=10, color="6B7280")
+
+            summary = provenance.get("summary") or {}
+            prov_rows = [
+                ("Persisted summary", _format_provenance_summary_value(summary)) if summary.get("has_data") else None,
+                ("Decision source", provenance["decision"].get("source", "")),
+                ("Decision path", provenance["decision"].get("path", "")),
+                ("Semantic state", provenance["semantic"].get("state", "")),
+                ("Semantic hint", provenance["semantic"].get("hint", "")),
+                ("Resolution chain steps", str(len(provenance.get("resolution_chain") or []))),
+            ]
+            for row_idx, entry in enumerate([row for row in prov_rows if row], 4):
+                label, value = entry
+                ws_prov.cell(row=row_idx, column=1, value=label).font = h_font
+                ws_prov.cell(row=row_idx, column=1).fill = h_fill
+                ws_prov.cell(row=row_idx, column=1).border = thin
+                ws_prov.cell(row=row_idx, column=2, value=value).font = body_font
+                ws_prov.cell(row=row_idx, column=2).alignment = wrap
+                ws_prov.cell(row=row_idx, column=2).border = thin
+
+            check_row = 10
+            ws_prov.cell(row=check_row, column=1, value="Semantic checks").font = h_font
+            ws_prov.cell(row=check_row, column=1).fill = h_fill
+            ws_prov.cell(row=check_row, column=1).border = thin
+            ws_prov.cell(row=check_row, column=2, value="Passed").font = h_font
+            ws_prov.cell(row=check_row, column=2).fill = h_fill
+            ws_prov.cell(row=check_row, column=2).border = thin
+            ws_prov.cell(row=check_row, column=3, value="Blocking").font = h_font
+            ws_prov.cell(row=check_row, column=3).fill = h_fill
+            ws_prov.cell(row=check_row, column=3).border = thin
+            ws_prov.cell(row=check_row, column=4, value="Severity").font = h_font
+            ws_prov.cell(row=check_row, column=4).fill = h_fill
+            ws_prov.cell(row=check_row, column=4).border = thin
+            ws_prov.cell(row=check_row, column=5, value="Detail").font = h_font
+            ws_prov.cell(row=check_row, column=5).fill = h_fill
+            ws_prov.cell(row=check_row, column=5).border = thin
+
+            for row_idx, check in enumerate(provenance.get("semantic_checks") or [], check_row + 1):
+                values = [
+                    check.get("name", ""),
+                    "YES" if check.get("passed") else "NO",
+                    "YES" if check.get("blocking") else "NO",
+                    check.get("severity", ""),
+                    check.get("detail", ""),
+                ]
+                for col_idx, value in enumerate(values, 1):
+                    cell = ws_prov.cell(row=row_idx, column=col_idx, value=value)
+                    cell.font = body_font
+                    cell.alignment = wrap
+                    cell.border = thin
+                ws_prov.row_dimensions[row_idx].height = 42
+
+            json_row = check_row + max(len(provenance.get("semantic_checks") or []), 1) + 3
+            ws_prov.cell(row=json_row, column=1, value="Raw provenance JSON").font = h_font
+            ws_prov.cell(row=json_row, column=1).fill = h_fill
+            ws_prov.cell(row=json_row, column=1).border = thin
+            raw_json = json.dumps(provenance.get("raw") or {}, ensure_ascii=False, indent=2, sort_keys=True)
+            ws_prov.cell(row=json_row + 1, column=1, value=raw_json)
+            ws_prov.cell(row=json_row + 1, column=1).font = XlFont(name="Consolas", size=10)
+            ws_prov.cell(row=json_row + 1, column=1).alignment = wrap
+            ws_prov.column_dimensions["A"].width = 28
+            ws_prov.column_dimensions["B"].width = 20
+            ws_prov.column_dimensions["C"].width = 14
+            ws_prov.column_dimensions["D"].width = 12
+            ws_prov.column_dimensions["E"].width = 64
+
         # ── Charts sheet ──
         temp_files = []
         try:
@@ -305,7 +495,7 @@ class ExportWorker(QObject):
         (
             project, results, done_results, latest, data,
             context, overview, module_rows, history_rows, issue_spotlight, action_items, history_story,
-            run_diff, settings,
+            run_diff, settings, provenance,
         ) = self._load_export_context()
 
         doc = Document()
@@ -385,6 +575,14 @@ class ExportWorker(QObject):
                     style="List Bullet",
                 )
 
+        if provenance.get("has_data"):
+            doc.add_heading("Provenance", level=1)
+            for line in _format_export_provenance_lines(provenance):
+                doc.add_paragraph(line, style="List Bullet")
+            raw_json = json.dumps(provenance.get("raw") or {}, ensure_ascii=False, indent=2, sort_keys=True)
+            doc.add_paragraph("Raw provenance JSON")
+            doc.add_paragraph(raw_json)
+
         # Summary table
         if done_results:
             doc.add_heading("QC Results Summary", level=1)
@@ -427,7 +625,7 @@ class ExportWorker(QObject):
         (
             project, results, done_results, latest, data,
             context, overview, module_rows, history_rows, issue_spotlight, action_items, history_story,
-            run_diff, settings,
+            run_diff, settings, provenance,
         ) = self._load_export_context()
 
         prs = Presentation()
@@ -625,6 +823,27 @@ class ExportWorker(QObject):
                 para = tf_settings.add_paragraph()
                 para.text = f"- {line}"
                 para.font.size = Pt(14)
+                para.font.color.rgb = RGBColor(0xD1, 0xD5, 0xDB)
+
+        if provenance.get("has_data"):
+            slide_prov = prs.slides.add_slide(prs.slide_layouts[6])
+            slide_prov.background.fill.solid()
+            slide_prov.background.fill.fore_color.rgb = RGBColor(0x0A, 0x0E, 0x17)
+
+            tx_title4 = slide_prov.shapes.add_textbox(Inches(0.5), Inches(0.3), Inches(12), Inches(0.8))
+            tf_title4 = tx_title4.text_frame
+            p = tf_title4.paragraphs[0]
+            p.text = "Provenance"
+            p.font.size = Pt(24)
+            p.font.color.rgb = RGBColor(0xF9, 0xFA, 0xFB)
+            p.font.bold = True
+
+            tx_prov = slide_prov.shapes.add_textbox(Inches(0.7), Inches(1.2), Inches(12), Inches(5.8))
+            tf_prov = tx_prov.text_frame
+            for idx, line in enumerate(_format_export_provenance_lines(provenance)):
+                para = tf_prov.paragraphs[0] if idx == 0 else tf_prov.add_paragraph()
+                para.text = line
+                para.font.size = Pt(15 if idx == 0 else 14)
                 para.font.color.rgb = RGBColor(0xD1, 0xD5, 0xDB)
 
         prs.save(self._output_path)

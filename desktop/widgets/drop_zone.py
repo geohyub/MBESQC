@@ -1,4 +1,9 @@
-"""MBESQC DropZone -- Drag-and-drop file upload area with glow effect."""
+"""MBESQC DropZone -- DEPRECATED: Use geoview_pyside6.widgets.FileDropZone instead.
+
+This file is kept for backward compatibility. All new code should use::
+
+    from geoview_pyside6.widgets import FileDropZone
+"""
 
 from __future__ import annotations
 

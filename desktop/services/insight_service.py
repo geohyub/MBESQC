@@ -10,6 +10,8 @@ import json
 import math
 from datetime import datetime
 
+from desktop.services.data_service import DataService
+
 
 QC_ORDER = [
     "preprocess",
@@ -248,6 +250,12 @@ def build_result_overview(result_data: dict) -> dict:
     action_items = build_action_checklist(result_data)
     if critical_findings:
         body_parts.append(f"핵심 이슈 {len(critical_findings)}개를 별도 spotlight로 정리했습니다.")
+
+    provenance_summary = DataService.extract_provenance_summary(result_data)
+    if provenance_summary.get("has_data"):
+        source = provenance_summary.get("source") or "unknown"
+        state = provenance_summary.get("semantic_state") or "unspecified"
+        body_parts.append(f"OffsetManager provenance {source} / {state}를 결과 JSON에서 함께 보관했습니다.")
 
     return {
         "headline": headline,
@@ -670,15 +678,29 @@ def build_module_story(qc_id: str, result_data: dict) -> dict:
         ov = result_data.get("offset_validation", {}) or {}
         config_checks = _problem_items(ov.get("config_checks", []), name_key="sensor")
         data_checks = _problem_items(ov.get("data_checks", []))
+        provenance_summary = DataService.extract_provenance_summary(result_data)
         if config_checks or data_checks or status in ("FAIL", "WARNING"):
             pieces = [f"Roll bias {roll}", f"Pitch bias {pitch}"]
             if config_checks:
                 pieces.append(f"OffsetManager 비교 이슈 {_join_issue_names(config_checks, name_key='sensor')}")
             if data_checks:
                 pieces.append(f"데이터 체크 이슈 {_join_issue_names(data_checks)}")
+            if provenance_summary.get("has_data"):
+                source = provenance_summary.get("source") or "unknown"
+                state = provenance_summary.get("semantic_state") or "unspecified"
+                checks_total = int(provenance_summary.get("semantic_checks_total") or 0)
+                checks_passed = int(provenance_summary.get("semantic_checks_passed") or 0)
+                provenance_bits = [f"provenance {source}", state]
+                if checks_total:
+                    provenance_bits.append(f"checks {checks_passed}/{checks_total}")
+                pieces.append("OffsetManager " + " / ".join(provenance_bits))
             current_reading = ", ".join(pieces) + "가 현재 판단의 근거입니다."
         else:
             current_reading = f"Roll bias {roll}, Pitch bias {pitch} 수준으로 큰 기준 이탈이 보이지 않습니다."
+            if provenance_summary.get("has_data"):
+                source = provenance_summary.get("source") or "unknown"
+                state = provenance_summary.get("semantic_state") or "unspecified"
+                current_reading += f" Persisted provenance는 {source} / {state}로 함께 저장되었습니다."
         next_steps = [meta["default_next"]]
 
     elif qc_id == "motion":
@@ -878,6 +900,28 @@ def build_project_context(
         )
 
     export_text = "Export는 최신 완료 QC 스냅샷과 모듈 해설을 기준으로 생성됩니다."
+    provenance_summary = {}
+    if latest_result:
+        latest_payload = latest_result.get("result_payload")
+        if not isinstance(latest_payload, dict):
+            latest_payload = {}
+            try:
+                latest_payload = json.loads(latest_result.get("result_json", "{}"))
+            except (TypeError, json.JSONDecodeError):
+                latest_payload = {}
+        provenance_summary = latest_result.get("provenance_summary")
+        if not isinstance(provenance_summary, dict):
+            provenance_summary = DataService.extract_provenance_summary(latest_payload)
+        if provenance_summary.get("has_data"):
+            source = provenance_summary.get("source") or "unknown"
+            state = provenance_summary.get("semantic_state") or "unspecified"
+            checks_total = int(provenance_summary.get("semantic_checks_total") or 0)
+            checks_passed = int(provenance_summary.get("semantic_checks_passed") or 0)
+            snapshot_text += f" | provenance {source} / {state}"
+            if checks_total:
+                export_text += f" Provenance checks {checks_passed}/{checks_total}도 함께 보관됩니다."
+            else:
+                export_text += f" Provenance {source} / {state}도 함께 보관됩니다."
 
     return {
         "flow": flow,
@@ -976,6 +1020,9 @@ def _join_issue_names(items: list[dict], name_key: str = "name") -> str:
 def _load_result_payload(row: dict | None) -> dict:
     if not row:
         return {}
+    payload = row.get("result_payload")
+    if isinstance(payload, dict):
+        return payload
     try:
         return json.loads(row.get("result_json") or "{}")
     except (TypeError, json.JSONDecodeError):

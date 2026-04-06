@@ -24,7 +24,9 @@ from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QShortcut, QKeySequence
 
 from geoview_pyside6 import GeoViewApp, Category
+from geoview_pyside6.icons import icon
 from geoview_pyside6.constants import Dark, Font
+from geoview_pyside6.help import set_help
 
 from desktop.app_controller import AppController
 from desktop.widgets.toast import ToastManager
@@ -81,7 +83,7 @@ class MBESQCApp(GeoViewApp):
             self.controller.navigate_project_detail.emit)
         self._dashboard.new_project.connect(
             self.controller.navigate_form_new.emit)
-        self.add_panel("dashboard", "\u25A0", self.t("sidebar.dashboard", "\ub300\uc2dc\ubcf4\ub4dc"), self._dashboard)
+        self.add_panel("dashboard", icon("layout-dashboard"), self.t("sidebar.dashboard", "\ub300\uc2dc\ubcf4\ub4dc"), self._dashboard)
 
         # Project Detail
         self._project_detail = ProjectDetailPanel()
@@ -93,29 +95,29 @@ class MBESQCApp(GeoViewApp):
             self.controller.navigate_form_edit.emit)
         self._project_detail.toast_requested.connect(
             self.controller.toast_requested.emit)
-        self.add_panel("project_detail", "\u25C6", self.t("sidebar.project_detail", "\ud504\ub85c\uc81d\ud2b8"), self._project_detail)
+        self.add_panel("project_detail", icon("folder-open"), self.t("sidebar.project_detail", "\ud504\ub85c\uc81d\ud2b8"), self._project_detail)
 
         # Upload
         self._upload = UploadPanel()
         self._upload.upload_complete.connect(self._on_upload_complete)
-        self.add_panel("upload", "\u25B2", self.t("sidebar.upload", "\uc5c5\ub85c\ub4dc"), self._upload)
+        self.add_panel("upload", icon("upload"), self.t("sidebar.upload", "\uc5c5\ub85c\ub4dc"), self._upload)
 
         # Analysis
         self._analysis = AnalysisPanel()
         self._analysis.back_to_project.connect(
             self.controller.navigate_project_detail.emit)
-        self.add_panel("analysis", "\u25C7", self.t("sidebar.analysis", "\ubd84\uc11d"), self._analysis)
+        self.add_panel("analysis", icon("bar-chart-3"), self.t("sidebar.analysis", "\ubd84\uc11d"), self._analysis)
 
         # DQR (Daily QC Report)
         self._dqr = DQRPanel()
         self._dqr.toast_requested.connect(self.controller.toast_requested.emit)
-        self.add_panel("dqr", "\u25A3", self.t("sidebar.dqr", "DQR"), self._dqr)
+        self.add_panel("dqr", icon("file-text"), self.t("sidebar.dqr", "DQR"), self._dqr)
 
         self.add_sidebar_separator(self.t("sidebar.management", "\uad00\ub9ac"))
 
         # Project Form
         self._form = ProjectFormPanel()
-        self.add_panel("form", "+", self.t("sidebar.form", "\uc0c8 \ud504\ub85c\uc81d\ud2b8"), self._form)
+        self.add_panel("form", icon("plus-circle"), self.t("sidebar.form", "\uc0c8 \ud504\ub85c\uc81d\ud2b8"), self._form)
 
         # Connect form signals
         self._form.saved.connect(self._on_project_saved)
@@ -208,24 +210,21 @@ class MBESQCApp(GeoViewApp):
             self._project_detail.refresh()
 
     def _delete_project(self, project_id: int):
-        from PySide6.QtWidgets import QMessageBox
         project = DataService.get_project(project_id)
         if not project:
             return
 
-        reply = QMessageBox.question(
-            self, "\ud504\ub85c\uc81d\ud2b8 \uc0ad\uc81c",
+        if not self.show_confirm(
+            self.t("dialog.project_delete_title", "\ud504\ub85c\uc81d\ud2b8 \uc0ad\uc81c"),
             f"'{project['name']}' \ud504\ub85c\uc81d\ud2b8\ub97c \uc0ad\uc81c\ud558\uc2dc\uaca0\uc2b5\ub2c8\uae4c?\n"
             "\ubaa8\ub4e0 \ud30c\uc77c\uacfc \ubd84\uc11d \uacb0\uacfc\uac00 \ud568\uaed8 \uc0ad\uc81c\ub429\ub2c8\ub2e4.",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-
-        if reply == QMessageBox.Yes:
-            DataService.delete_project(project_id)
-            self.controller.show_toast(self.t("toast.project_deleted", "\ud504\ub85c\uc81d\ud2b8\uac00 \uc0ad\uc81c\ub418\uc5c8\uc2b5\ub2c8\ub2e4"), "success")
-            self._dashboard.refresh()
-            self._switch_to("dashboard")
+            confirm_text="Delete",
+        ):
+            return
+        DataService.delete_project(project_id)
+        self.controller.show_toast(self.t("toast.project_deleted", "\ud504\ub85c\uc81d\ud2b8\uac00 \uc0ad\uc81c\ub418\uc5c8\uc2b5\ub2c8\ub2e4"), "success")
+        self._dashboard.refresh()
+        self._switch_to("dashboard")
 
     def _show_export_menu(self, project_id: int):
         """Show export format dropdown menu."""
@@ -349,35 +348,43 @@ class MBESQCApp(GeoViewApp):
                 item.widget().deleteLater()
 
         if panel_id == "dashboard":
-            self.top_bar.add_action_button(self.t("action.new_project", "+ \uc0c8 \ud504\ub85c\uc81d\ud2b8"),
+            btn = self.top_bar.add_action_button(self.t("action.new_project", "+ \uc0c8 \ud504\ub85c\uc81d\ud2b8"),
                                            self._on_navigate_to_new_project,
                                            primary=True)
+            set_help(btn, "Create a new MBES QC project")
 
         elif panel_id == "project_detail":
             pid = self._project_detail.get_project_id()
             if pid:
-                self.top_bar.add_action_button(self.t("action.back", "Back"),
+                btn = self.top_bar.add_action_button(self.t("action.back", "Back"),
                     lambda p=pid: self._switch_to("dashboard"))
-                self.top_bar.add_action_button(self.t("action.upload", "Upload"),
+                set_help(btn, "Return to dashboard")
+                btn = self.top_bar.add_action_button(self.t("action.upload", "Upload"),
                     lambda p=pid: self.controller.navigate_upload.emit(p))
-                self.top_bar.add_action_button(self.t("action.project_qc", "\ud504\ub85c\uc81d\ud2b8 QC"),
+                set_help(btn, "Upload MBES data files to this project")
+                btn = self.top_bar.add_action_button(self.t("action.project_qc", "\ud504\ub85c\uc81d\ud2b8 QC"),
                     lambda: self._project_detail.run_batch_qc())
-                self.top_bar.add_action_button(self.t("action.export", "Export"),
+                set_help(btn, "Run QC analysis on all files at once")
+                btn = self.top_bar.add_action_button(self.t("action.export", "Export"),
                     lambda p=pid: self._show_export_menu(p))
+                set_help(btn, "Export QC results to Excel/Word/PPT")
 
         elif panel_id == "upload":
             pid = getattr(self._upload, '_project_id', None)
             if pid:
-                self.top_bar.add_action_button(self.t("action.back", "Back"),
+                btn = self.top_bar.add_action_button(self.t("action.back", "Back"),
                     lambda p=pid: self._on_navigate_to_project(p))
+                set_help(btn, "Return to project detail")
 
         elif panel_id == "analysis":
             pid = self._analysis.get_project_id()
             if pid:
-                self.top_bar.add_action_button(self.t("action.back", "Back"),
+                btn = self.top_bar.add_action_button(self.t("action.back", "Back"),
                     lambda p=pid: self._on_navigate_to_project(p))
-                self.top_bar.add_action_button(self.t("action.export", "Export"),
+                set_help(btn, "Return to project detail")
+                btn = self.top_bar.add_action_button(self.t("action.export", "Export"),
                     lambda p=pid: self._show_export_menu(p))
+                set_help(btn, "Export QC results to Excel/Word/PPT")
 
         elif panel_id == "form":
             pass  # Form has its own Cancel/Save buttons

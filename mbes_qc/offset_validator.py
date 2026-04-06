@@ -39,6 +39,7 @@ class OffsetValidationResult:
     vessel_name: str = ""
     config_checks: list[OffsetCheckItem] = field(default_factory=list)
     data_checks: list[OffsetCheckItem] = field(default_factory=list)
+    provenance: dict = field(default_factory=dict)
 
     @property
     def overall(self) -> str:
@@ -214,6 +215,30 @@ def validate_offsets(
 
     # 3. Load OffsetManager reference
     om_offsets = {}
+    reference_source = "unresolved"
+    reference_mode = "api-first"
+    reference_scope = "none"
+    reference_path = ""
+    reference_exists = False
+    reference_hint = "No OffsetManager config found. Provide config_id or vessel_name."
+    source_label = "OffsetManager reference"
+    if om_offsets_dict:
+        reference_source = "preloaded"
+        reference_mode = "preloaded"
+        reference_scope = "preloaded"
+        source_label = "OffsetManager preloaded reference"
+    elif om_payload:
+        reference_source = "api"
+        reference_mode = "api"
+        reference_scope = "payload"
+        source_label = "OffsetManager API payload"
+    elif offsetmanager_db:
+        reference_source = "db"
+        reference_mode = "sqlite"
+        reference_scope = f"config_id:{config_id}" if config_id is not None else f"vessel_name:{vessel_name or meta.vessel_name}"
+        reference_path = str(offsetmanager_db)
+        reference_exists = Path(reference_path).expanduser().exists()
+        source_label = "OffsetManager SQLite DB"
     if om_offsets_dict:
         om_offsets = om_offsets_dict
     elif om_payload:
@@ -224,6 +249,31 @@ def validate_offsets(
             config_id=config_id,
             vessel_name=vessel_name or meta.vessel_name,
         )
+
+    def _build_provenance(semantic_state: str, semantic_hint: str, semantic_checks: list[dict]) -> dict:
+        decision = {
+            "source": reference_source,
+            "source_label": source_label,
+            "path": reference_path,
+            "exists": reference_exists,
+            "mode": reference_mode,
+            "fallback_scope": reference_scope,
+            "hint": reference_hint if not om_offsets else semantic_hint,
+            "loaded_sensor_count": len(om_offsets),
+        }
+        fallback_candidate = dict(decision)
+        return {
+            "decision": decision,
+            "fallback_candidate": fallback_candidate,
+            "semantic": {
+                "state": semantic_state,
+                "hint": semantic_hint,
+                "checks": semantic_checks,
+                "overall": result.overall,
+                "loaded_sensor_count": len(om_offsets),
+            },
+            "resolution_chain": [fallback_candidate, decision],
+        }
 
     if not om_offsets:
         result.config_checks.append(OffsetCheckItem(
@@ -239,6 +289,17 @@ def validate_offsets(
                 pds_value=0, reference_value=0, status="INFO",
                 suggestion=f"PDS: X={pds_xyz['x']:+.3f} Y={pds_xyz['y']:+.3f} Z={pds_xyz['z']:+.3f}",
             ))
+        result.provenance["om"] = _build_provenance(
+            "missing",
+            "No OffsetManager config found. Provide config_id or vessel_name.",
+            [
+                {
+                    "name": "OffsetManager",
+                    "status": "INFO",
+                    "detail": "No OffsetManager config found. Provide config_id or vessel_name.",
+                }
+            ],
+        )
         return result
 
     # 4. Compare PDS vs OffsetManager for each sensor
@@ -330,6 +391,24 @@ def validate_offsets(
                 sensor="Data", field="Read",
                 status="WARNING", suggestion=f"Could not read PDS binary: {e}",
             ))
+
+    if result.provenance.get("om") is None:
+        semantic_state = "verified" if result.overall == "PASS" else "review-risk" if result.overall == "WARNING" else "mismatch-risk"
+        semantic_hint = (
+            "OffsetManager reference loaded from the selected source and compared against PDS header/data."
+            if om_offsets else
+            "OffsetManager reference could not be loaded."
+        )
+        semantic_checks = [
+            {
+                "name": item.sensor or "OffsetManager",
+                "field": item.field or "",
+                "status": item.status,
+                "detail": item.suggestion,
+            }
+            for item in (result.config_checks[:4] + result.data_checks[:4])
+        ]
+        result.provenance["om"] = _build_provenance(semantic_state, semantic_hint, semantic_checks)
 
     return result
 

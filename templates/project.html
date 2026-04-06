@@ -432,7 +432,7 @@
                         <div class="col-12">
                             <label class="form-label">
                                 <i class="ti ti-ruler-measure"></i> OffsetManager 연동
-                                <span class="text-muted ms-1" style="font-size:0.8em">(API 우선, 프로젝트에 저장된 DB 경로가 있을 때만 보조 사용)</span>
+                                <span class="text-muted ms-1" style="font-size:0.8em">(API 우선, 요청 경로 fallback은 체크박스에서만 허용)</span>
                             </label>
                             <div class="input-group">
                                 <input type="text" class="form-control" name="offset_db_path" id="offsetDbPath"
@@ -442,9 +442,26 @@
                                     <i class="ti ti-refresh"></i> API 우선 불러오기
                                 </button>
                             </div>
-                            <div class="form-text">
-                                기본적으로 OffsetManager API(포트 5302)를 먼저 사용합니다. 프로젝트에 저장된 DB 경로가 있을 때만, API가 실패한 경우에 한해 로컬 SQLite를 보조로 읽습니다.
+                            <div class="form-check mt-2">
+                                <input class="form-check-input" type="checkbox" id="allowSqliteFallback">
+                                <label class="form-check-label" for="allowSqliteFallback">
+                                    요청 경로의 명시적 SQLite fallback 사용
+                                </label>
                             </div>
+                            <div class="form-check mt-2">
+                                <input class="form-check-input" type="checkbox" id="offsetDbPathConfirmed" name="offset_db_path_confirmed" value="1" {% if project.offset_db_path_confirmed %}checked{% endif %}>
+                                <label class="form-check-label" for="offsetDbPathConfirmed">
+                                    프로젝트 저장 DB 경로 fallback 사용
+                                </label>
+                            </div>
+                            <div class="form-text">
+                                기본적으로 OffsetManager API(포트 5302)를 먼저 사용합니다. 요청 경로는 위 체크박스를 켤 때만 읽고, 프로젝트에 저장된 DB 경로는 별도 확인 체크박스를 켠 경우에만 fallback으로 사용합니다. 경로를 바꾸면 저장된 fallback 확인이 자동으로 해제됩니다.
+                            </div>
+                            <div class="small text-muted mt-2">
+                                현재 프로젝트 fallback 상태:
+                                <code>{{ 'enabled' if project.offset_db_path_confirmed else 'disabled' }}</code>
+                            </div>
+                            <div id="omConfigProvenance"></div>
                         </div>
                     </div>
                     <div class="row mb-3" id="vesselConfigRow" style="display:none">
@@ -1182,7 +1199,8 @@ function verifyOffsets(pdsPath) {
             hvf_dir: '{{ project.hvf_dir or "" }}',
             om_config_id: '{{ project.om_config_id or "" }}',
             project_id: {{ project.id }},
-            offset_db_path: document.getElementById('offsetDbPath').value || '',
+            offset_db_path: getAllowSqliteFallback() ? (document.getElementById('offsetDbPath').value || '') : '',
+            allow_sqlite_fallback: getAllowSqliteFallback(),
         })
     })
     .then(r => r.json())
@@ -1279,25 +1297,135 @@ function runProjectQc(projectId, fileIdx) {
 }
 
 // ── OffsetManager 연동 ──
+function renderOmSemanticSummary(provenance) {
+    const state = provenance.semantic_state || '';
+    const labelMap = {
+        'verified': '검증됨',
+        'stale-risk': '오래된 가능성',
+        'review-risk': '검토 필요',
+        'schema-risk': '스키마 불일치',
+        'missing': '경로 없음',
+        'empty': '빈 DB',
+        'unconfigured': '미설정',
+    };
+    const badgeClassMap = {
+        'verified': 'bg-green',
+        'stale-risk': 'bg-red',
+        'review-risk': 'bg-red',
+        'schema-risk': 'bg-red',
+        'missing': 'bg-red',
+        'empty': 'bg-red',
+        'unconfigured': 'bg-secondary',
+    };
+
+    const lines = [];
+    if (state) {
+        lines.push(`<div class="small text-muted mt-1">semantic: <span class="badge ${badgeClassMap[state] || 'bg-yellow'}">${labelMap[state] || state}</span></div>`);
+    }
+    if (provenance.schema_version !== undefined && provenance.schema_version !== null) {
+        lines.push(`<div class="small text-muted mt-1">schema user_version: <code>${provenance.schema_version}</code></div>`);
+    }
+    if (provenance.latest_project_name || provenance.latest_vessel_name) {
+        const latestParts = [
+            provenance.latest_project_name || 'project N/A',
+            provenance.latest_vessel_name || 'vessel N/A',
+        ];
+        const reviewPart = provenance.latest_review_state ? ` | review: <code>${provenance.latest_review_state}</code>` : '';
+        lines.push(`<div class="small text-muted mt-1">latest config: <code>${latestParts[0]}</code> / <code>${latestParts[1]}</code>${reviewPart}</div>`);
+    }
+    if (provenance.semantic_hint && provenance.semantic_hint !== provenance.hint) {
+        lines.push(`<div class="small text-muted mt-1">${provenance.semantic_hint}</div>`);
+    }
+    if (Array.isArray(provenance.semantic_checks) && provenance.semantic_checks.length > 0) {
+        const checkHtml = provenance.semantic_checks.map((check) => {
+            const stateClass = check.passed ? 'bg-green' : 'bg-red';
+            const stateLabel = check.passed ? 'PASS' : 'BLOCK';
+            return `<span class="badge ${stateClass} me-1 mb-1">${check.name}: ${stateLabel}</span>`;
+        }).join('');
+        lines.push(`<div class="small text-muted mt-1">semantic checks: ${checkHtml}</div>`);
+    }
+    return lines.join('');
+}
+
+function renderOmProvenance(targetId, provenance) {
+    const el = document.getElementById(targetId);
+    if (!el) return;
+
+    if (!provenance) {
+        el.innerHTML = '';
+        return;
+    }
+
+    const mode = provenance.mode || 'api-first';
+    const isFallback = mode === 'explicit-sqlite-fallback';
+    const semanticRisk = ['stale-risk', 'review-risk', 'schema-risk', 'missing', 'empty'].includes(provenance.semantic_state || '');
+    const modeLabel = isFallback ? '명시적 SQLite fallback' : 'API-first';
+    const modeClass = isFallback ? 'bg-yellow' : 'bg-green';
+    const projectGateLine = provenance.project_fallback_configured
+        ? `<div class="small text-muted mt-1">프로젝트 fallback: <code>${provenance.project_fallback_enabled ? 'enabled' : 'disabled'}</code></div>`
+        : '';
+    const requestGateLine = provenance.request_path_supplied
+        ? `<div class="small text-muted mt-1">요청 fallback: <code>${provenance.request_fallback_enabled ? 'enabled' : 'disabled'}</code></div>`
+        : '';
+    const pathLine = provenance.path
+        ? `<div class="small text-muted mt-1">경로: <code>${provenance.path}</code>${provenance.exists ? '' : ' (존재하지 않음)'}</div>`
+        : '';
+    const scopeLine = provenance.fallback_scope && provenance.fallback_scope !== 'none'
+        ? `<div class="small text-muted mt-1">fallback scope: <code>${provenance.fallback_scope}</code></div>`
+        : '';
+    const alertClass = semanticRisk ? 'alert-danger' : (isFallback ? 'alert-warning' : 'alert-secondary');
+
+    el.innerHTML = `<div class="alert ${alertClass} p-2 mb-2">
+        <strong>출처:</strong> ${provenance.source_label || provenance.source || 'unknown'}
+        <span class="badge ${modeClass} ms-1">${modeLabel}</span>
+        ${provenance.hint ? `<div class="small text-muted mt-1">${provenance.hint}</div>` : ''}
+        ${renderOmSemanticSummary(provenance)}
+        ${projectGateLine}
+        ${requestGateLine}
+        ${pathLine}
+        ${scopeLine}
+    </div>`;
+}
+
+function getAllowSqliteFallback() {
+    const checkbox = document.getElementById('allowSqliteFallback');
+    return !!(checkbox && checkbox.checked);
+}
+
 function loadVesselConfigs() {
     const dbPath = document.getElementById('offsetDbPath').value;
     const projectId = {{ project.id }};
+    const allowSqliteFallback = getAllowSqliteFallback();
 
     const params = new URLSearchParams();
-    if (dbPath) {
+    if (dbPath && allowSqliteFallback) {
         params.set('db_path', dbPath);
     }
     params.set('project_id', projectId);
+    params.set('include_provenance', '1');
+    if (allowSqliteFallback) {
+        params.set('allow_sqlite_fallback', '1');
+    }
 
     const url = '/api/om-configs?' + params.toString();
+    const provenanceEl = document.getElementById('omConfigProvenance');
+    if (provenanceEl) {
+        provenanceEl.innerHTML = '';
+    }
 
     fetch(url)
     .then(r => r.json())
-    .then(configs => {
+    .then(payload => {
+        const configs = Array.isArray(payload) ? payload : payload.configs;
+        const provenance = Array.isArray(payload) ? null : payload.provenance || null;
+
         if (!Array.isArray(configs)) {
-            alert((configs && (configs.detail || configs.error)) || 'OffsetManager 연결 정보를 불러오지 못했습니다. API 실행 상태나 프로젝트에 저장된 DB 경로를 확인해 주세요.');
+            alert((payload && (payload.detail || payload.error)) || 'OffsetManager 연결 정보를 불러오지 못했습니다. API 실행 상태와 요청/프로젝트 fallback 확인 상태를 점검해 주세요.');
             return;
         }
+
+        renderOmProvenance('omConfigProvenance', provenance);
+
         const sel = document.getElementById('vesselConfigSelect');
         sel.innerHTML = '<option value="">-- 선택하세요 --</option>';
 
@@ -1313,12 +1441,16 @@ function loadVesselConfigs() {
         }
 
         document.getElementById('vesselConfigRow').style.display = '';
-        sel.onchange = () => loadSensorPreview(sel.value, dbPath);
+        sel.onchange = () => loadSensorPreview(
+            sel.value,
+            document.getElementById('offsetDbPath').value,
+            getAllowSqliteFallback()
+        );
     })
-    .catch(e => alert('OffsetManager 연결 정보를 읽을 수 없습니다. API 실행 상태나 프로젝트에 저장된 DB 경로를 확인해 주세요.\n' + e));
+    .catch(e => alert('OffsetManager 연결 정보를 읽을 수 없습니다. API 실행 상태나 "명시적 SQLite fallback 사용" 체크 상태를 확인해 주세요.\n' + e));
 }
 
-function loadSensorPreview(configId, dbPath) {
+function loadSensorPreview(configId, dbPath, allowSqliteFallback) {
     if (!configId) {
         document.getElementById('sensorPreview').style.display = 'none';
         document.getElementById('sensorProvenance').innerHTML = '';
@@ -1327,10 +1459,13 @@ function loadSensorPreview(configId, dbPath) {
     const projectId = {{ project.id }};
 
     const params = new URLSearchParams();
-    if (dbPath) {
+    if (dbPath && allowSqliteFallback) {
         params.set('db_path', dbPath);
     }
     params.set('project_id', projectId);
+    if (allowSqliteFallback) {
+        params.set('allow_sqlite_fallback', '1');
+    }
 
     const url = '/api/om-sensors/' + configId + '?' + params.toString();
 
@@ -1343,18 +1478,31 @@ function loadSensorPreview(configId, dbPath) {
             return;
         }
 
+        const provenance = data.resolution || data;
         const provenanceEl = document.getElementById('sensorProvenance');
         if (provenanceEl) {
-            const modeLabel = data.mode === 'db-fallback' ? 'DB fallback' : 'API-first';
-            const modeClass = data.mode === 'db-fallback' ? 'bg-yellow' : 'bg-green';
-            const pathLine = data.path
-                ? `<div class="small text-muted mt-1">경로: <code>${data.path}</code>${data.exists ? '' : ' (존재하지 않음)'}</div>`
+            const mode = provenance.mode || 'api-first';
+            const isFallback = mode === 'explicit-sqlite-fallback';
+            const semanticRisk = ['stale-risk', 'review-risk', 'schema-risk', 'missing', 'empty'].includes(provenance.semantic_state || '');
+            const modeLabel = isFallback ? '명시적 SQLite fallback' : 'API-first';
+            const modeClass = isFallback ? 'bg-yellow' : 'bg-green';
+            const projectGateLine = provenance.project_fallback_configured
+                ? `<div class="small text-muted mt-1">프로젝트 fallback: <code>${provenance.project_fallback_enabled ? 'enabled' : 'disabled'}</code></div>`
                 : '';
-            provenanceEl.innerHTML = `<div class="alert alert-secondary p-2 mb-2">
-                <strong>출처:</strong> ${data.source_label || data.source || 'unknown'}
+            const pathLine = provenance.path
+                ? `<div class="small text-muted mt-1">경로: <code>${provenance.path}</code>${provenance.exists ? '' : ' (존재하지 않음)'}</div>`
+                : '';
+            const scopeLine = provenance.fallback_scope && provenance.fallback_scope !== 'none'
+                ? `<div class="small text-muted mt-1">fallback scope: <code>${provenance.fallback_scope}</code></div>`
+                : '';
+            provenanceEl.innerHTML = `<div class="alert ${semanticRisk ? 'alert-danger' : (isFallback ? 'alert-warning' : 'alert-secondary')} p-2 mb-2">
+                <strong>출처:</strong> ${provenance.source_label || provenance.source || 'unknown'}
                 <span class="badge ${modeClass} ms-1">${modeLabel}</span>
-                ${data.hint ? `<div class="small text-muted mt-1">${data.hint}</div>` : ''}
+                ${provenance.hint ? `<div class="small text-muted mt-1">${provenance.hint}</div>` : ''}
+                ${renderOmSemanticSummary(provenance)}
+                ${projectGateLine}
                 ${pathLine}
+                ${scopeLine}
             </div>`;
         }
 
@@ -1380,7 +1528,7 @@ function loadSensorPreview(configId, dbPath) {
 
         document.getElementById('sensorPreview').style.display = '';
     })
-    .catch(e => alert('센서 정보를 읽을 수 없습니다: ' + e));
+    .catch(e => alert('센서 정보를 읽을 수 없습니다. API 실행 상태와 요청/프로젝트 fallback 확인 상태를 점검해 주세요.\n' + e));
 }
 </script>
 {% endblock %}

@@ -57,6 +57,133 @@ class DataService:
     """Stateless adapter: all methods are @staticmethod."""
 
     @staticmethod
+    def _normalize_provenance_summary(summary: Optional[dict]) -> dict:
+        """Return a stable provenance summary shape for persisted QC payloads."""
+        data = summary if isinstance(summary, dict) else {}
+        semantic_checks_total = data.get("semantic_checks_total", 0)
+        semantic_checks_passed = data.get("semantic_checks_passed", 0)
+        try:
+            semantic_checks_total = int(semantic_checks_total or 0)
+        except (TypeError, ValueError):
+            semantic_checks_total = 0
+        try:
+            semantic_checks_passed = int(semantic_checks_passed or 0)
+        except (TypeError, ValueError):
+            semantic_checks_passed = 0
+
+        return {
+            "has_data": bool(data.get("has_data", False)),
+            "source": data.get("source", ""),
+            "mode": data.get("mode", ""),
+            "path": data.get("path", ""),
+            "semantic_state": data.get("semantic_state", ""),
+            "semantic_hint": data.get("semantic_hint", ""),
+            "semantic_checks_total": semantic_checks_total,
+            "semantic_checks_passed": semantic_checks_passed,
+            "request_fallback_enabled": bool(data.get("request_fallback_enabled", False)),
+            "project_fallback_enabled": bool(data.get("project_fallback_enabled", False)),
+            "project_fallback_configured": bool(data.get("project_fallback_configured", False)),
+            "fallback_scope": data.get("fallback_scope", ""),
+        }
+
+    @staticmethod
+    def extract_provenance_summary(result_payload: Optional[dict]) -> dict:
+        """Extract a compact, machine-readable provenance summary from stored QC JSON."""
+        data = result_payload if isinstance(result_payload, dict) else {}
+        stored_summary = data.get("provenance_summary")
+        if isinstance(stored_summary, dict):
+            return DataService._normalize_provenance_summary(stored_summary)
+
+        raw = {}
+
+        offset_validation = data.get("offset_validation") or {}
+        if isinstance(offset_validation, dict):
+            raw = offset_validation.get("provenance") or {}
+
+        if not raw:
+            raw = data.get("provenance") or {}
+
+        if not isinstance(raw, dict):
+            raw = {}
+
+        om = raw.get("om") or {}
+        if not isinstance(om, dict):
+            om = {}
+
+        decision = om.get("decision") or {}
+        if not isinstance(decision, dict):
+            decision = {}
+
+        semantic = om.get("semantic") or {}
+        if not isinstance(semantic, dict):
+            semantic = {}
+
+        semantic_checks = semantic.get("checks") or []
+        if not isinstance(semantic_checks, list):
+            semantic_checks = []
+
+        return DataService._normalize_provenance_summary({
+            "has_data": bool(raw),
+            "source": decision.get("source", ""),
+            "mode": decision.get("mode", ""),
+            "path": decision.get("path", ""),
+            "semantic_state": semantic.get("state", ""),
+            "semantic_hint": semantic.get("hint", ""),
+            "semantic_checks_total": len(semantic_checks),
+            "semantic_checks_passed": sum(1 for check in semantic_checks if check.get("passed")),
+            "request_fallback_enabled": bool(decision.get("request_fallback_enabled", False)),
+            "project_fallback_enabled": bool(decision.get("project_fallback_enabled", False)),
+            "project_fallback_configured": bool(decision.get("project_fallback_configured", False)),
+            "fallback_scope": decision.get("fallback_scope", ""),
+        })
+
+    @staticmethod
+    def extract_provenance_manifest(result_payload: Optional[dict]) -> dict:
+        """Build a compact machine-readable provenance manifest for downstream consumers."""
+        summary = DataService.extract_provenance_summary(result_payload)
+        if not summary.get("has_data"):
+            return {}
+
+        return {
+            "type": "mbesqc.provenance-manifest",
+            "version": 1,
+            "summary": summary,
+            "has_data": summary.get("has_data", False),
+            "source": summary.get("source", ""),
+            "mode": summary.get("mode", ""),
+            "path": summary.get("path", ""),
+            "semantic_state": summary.get("semantic_state", ""),
+            "semantic_hint": summary.get("semantic_hint", ""),
+            "semantic_checks_total": summary.get("semantic_checks_total", 0),
+            "semantic_checks_passed": summary.get("semantic_checks_passed", 0),
+            "request_fallback_enabled": summary.get("request_fallback_enabled", False),
+            "project_fallback_enabled": summary.get("project_fallback_enabled", False),
+            "project_fallback_configured": summary.get("project_fallback_configured", False),
+            "fallback_scope": summary.get("fallback_scope", ""),
+        }
+
+    @staticmethod
+    def _attach_result_payload(row: Optional[dict]) -> Optional[dict]:
+        if not row:
+            return None
+        payload = dict(row)
+        try:
+            parsed_payload = json.loads(payload.get("result_json") or "{}")
+        except (TypeError, json.JSONDecodeError):
+            parsed_payload = {}
+
+        provenance_summary = DataService.extract_provenance_summary(parsed_payload)
+        parsed_payload["provenance_summary"] = provenance_summary
+        provenance_manifest = DataService.extract_provenance_manifest(parsed_payload)
+        if provenance_manifest:
+            parsed_payload["provenance_manifest"] = provenance_manifest
+        payload["result_payload"] = parsed_payload
+        payload["provenance_summary"] = provenance_summary
+        if provenance_manifest:
+            payload["provenance_manifest"] = provenance_manifest
+        return payload
+
+    @staticmethod
     def init_db():
         """Create tables if not exist."""
         conn = _get_conn()
@@ -287,21 +414,21 @@ class DataService:
     def get_qc_result(result_id: int) -> Optional[dict]:
         row = _get_conn().execute(
             "SELECT * FROM qc_results WHERE id = ?", (result_id,)).fetchone()
-        return dict(row) if row else None
+        return DataService._attach_result_payload(dict(row) if row else None)
 
     @staticmethod
     def get_file_qc_results(file_id: int) -> list[dict]:
         rows = _get_conn().execute(
             "SELECT * FROM qc_results WHERE file_id = ? ORDER BY started_at DESC",
             (file_id,)).fetchall()
-        return [dict(r) for r in rows]
+        return [DataService._attach_result_payload(dict(r)) for r in rows]
 
     @staticmethod
     def get_project_qc_results(project_id: int) -> list[dict]:
         rows = _get_conn().execute(
             "SELECT * FROM qc_results WHERE project_id = ? ORDER BY started_at DESC",
             (project_id,)).fetchall()
-        return [dict(r) for r in rows]
+        return [DataService._attach_result_payload(dict(r)) for r in rows]
 
     @staticmethod
     def get_latest_file_result(file_id: int) -> Optional[dict]:
@@ -309,7 +436,7 @@ class DataService:
             """SELECT * FROM qc_results WHERE file_id = ? AND status = 'done'
                ORDER BY finished_at DESC LIMIT 1""",
             (file_id,)).fetchone()
-        return dict(row) if row else None
+        return DataService._attach_result_payload(dict(row) if row else None)
 
     @staticmethod
     def get_latest_project_result(project_id: int) -> Optional[dict]:
@@ -317,7 +444,7 @@ class DataService:
             """SELECT * FROM qc_results WHERE project_id = ? AND status = 'done'
                ORDER BY finished_at DESC LIMIT 1""",
             (project_id,)).fetchone()
-        return dict(row) if row else None
+        return DataService._attach_result_payload(dict(row) if row else None)
 
     # ── Activity Log ──
 
