@@ -23,12 +23,33 @@ from PySide6.QtWidgets import (
     QSizePolicy, QGroupBox, QGridLayout,
 )
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius, BTN_PRIMARY, BTN_SECONDARY
+from geoview_pyside6.constants import Font, Space, Radius
+from geoview_pyside6.theme_aware import c
 
 from desktop.services.caris_batch_service import (
     CarisBatchConfig, CarisBatchRunner, find_carisbatch, is_caris_available,
 )
 from desktop.services.dqr_service import DqrConfig, DqrWorker
+
+
+def _btn_primary_qss() -> str:
+    """c()-based primary button QSS."""
+    return f"""
+        QPushButton {{
+            background: {c().CYAN};
+            color: #ffffff;
+            border: none;
+            border-radius: {Radius.BASE}px;
+            font-size: {Font.SM}px;
+            font-weight: {Font.MEDIUM};
+            padding: 7px 18px;
+        }}
+        QPushButton:hover {{ background: {c().CYAN_H}; }}
+        QPushButton:disabled {{
+            background: {c().SLATE};
+            color: {c().DIM};
+        }}
+    """
 
 
 class _PathInput(QFrame):
@@ -38,48 +59,49 @@ class _PathInput(QFrame):
         super().__init__(parent)
         self._file_filter = file_filter
         self._is_dir = is_dir
+        self.setStyleSheet("background: transparent; border: none;")
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(Space.SM)
 
-        lbl = QLabel(label)
-        lbl.setFixedWidth(120)
-        lbl.setStyleSheet(f"color: {Dark.MUTED}; font-size: {Font.SM}px;")
-        layout.addWidget(lbl)
+        self._lbl = QLabel(label)
+        self._lbl.setFixedWidth(120)
+        self._lbl.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.SM}px;")
+        layout.addWidget(self._lbl)
 
         self.input = QLineEdit()
         self.input.setPlaceholderText("경로를 선택하세요...")
         self.input.setStyleSheet(f"""
             QLineEdit {{
-                background: {Dark.DARK};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: {Radius.SM}px;
                 padding: 6px 10px;
                 font-size: {Font.SM}px;
             }}
             QLineEdit:focus {{
-                border-color: {Dark.CYAN};
+                border-color: {c().GREEN};
             }}
         """)
         layout.addWidget(self.input, 1)
 
-        btn = QPushButton("...")
-        btn.setFixedSize(32, 32)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setStyleSheet(f"""
+        self._btn = QPushButton("...")
+        self._btn.setFixedSize(32, 32)
+        self._btn.setCursor(Qt.PointingHandCursor)
+        self._btn.setStyleSheet(f"""
             QPushButton {{
-                background: {Dark.NAVY};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
+                background: {c().NAVY};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: {Radius.SM}px;
                 font-weight: bold;
             }}
-            QPushButton:hover {{ background: {Dark.SLATE}; }}
+            QPushButton:hover {{ background: {c().SLATE}; }}
         """)
-        btn.clicked.connect(self._browse)
-        layout.addWidget(btn)
+        self._btn.clicked.connect(self._browse)
+        layout.addWidget(self._btn)
 
     def _browse(self):
         if self._is_dir:
@@ -88,6 +110,33 @@ class _PathInput(QFrame):
             path, _ = QFileDialog.getOpenFileName(self, "파일 선택", "", self._file_filter)
         if path:
             self.input.setText(path)
+
+    def refresh_theme(self):
+        """Re-apply theme colours."""
+        self._lbl.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.SM}px;")
+        self.input.setStyleSheet(f"""
+            QLineEdit {{
+                background: {c().DARK};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
+                border-radius: {Radius.SM}px;
+                padding: 6px 10px;
+                font-size: {Font.SM}px;
+            }}
+            QLineEdit:focus {{
+                border-color: {c().GREEN};
+            }}
+        """)
+        self._btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {c().NAVY};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
+                border-radius: {Radius.SM}px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background: {c().SLATE}; }}
+        """)
 
     def value(self) -> str:
         return self.input.text().strip()
@@ -105,12 +154,8 @@ class _CLIAutomationTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet(f"""
-            QScrollArea {{ background: transparent; border: none; }}
-            QScrollArea > QWidget > QWidget {{ background: transparent; }}
-        """)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -119,63 +164,41 @@ class _CLIAutomationTab(QWidget):
 
         # CARIS status
         caris_path = find_carisbatch()
-        status_frame = QFrame()
-        status_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
-                border-radius: {Radius.BASE}px;
-                padding: {Space.MD}px;
-            }}
-        """)
-        sl = QHBoxLayout(status_frame)
+        self._status_frame = QFrame()
+        sl = QHBoxLayout(self._status_frame)
 
+        self._caris_available = bool(caris_path)
         if caris_path:
-            icon = QLabel("CARIS")
-            icon.setStyleSheet(f"""
-                color: {Dark.GREEN};
-                font-size: {Font.SM}px;
-                font-weight: {Font.BOLD};
-                background: transparent;
-            """)
-            sl.addWidget(icon)
-            path_lbl = QLabel(caris_path)
-            path_lbl.setStyleSheet(f"color: {Dark.DIM}; font-size: {Font.XS}px; background: transparent;")
-            sl.addWidget(path_lbl, 1)
+            self._caris_icon = QLabel("CARIS")
+            sl.addWidget(self._caris_icon)
+            self._caris_detail = QLabel(caris_path)
+            sl.addWidget(self._caris_detail, 1)
         else:
-            icon = QLabel("CARIS NOT FOUND")
-            icon.setStyleSheet(f"""
-                color: {Dark.ORANGE};
-                font-size: {Font.SM}px;
-                font-weight: {Font.BOLD};
-                background: transparent;
-            """)
-            sl.addWidget(icon)
-            hint = QLabel("carisbatch가 PATH에 없습니다. CARIS HIPS and SIPS를 설치하세요.")
-            hint.setStyleSheet(f"color: {Dark.DIM}; font-size: {Font.XS}px; background: transparent;")
-            hint.setWordWrap(True)
-            sl.addWidget(hint, 1)
+            self._caris_icon = QLabel("CARIS NOT FOUND")
+            sl.addWidget(self._caris_icon)
+            self._caris_detail = QLabel("carisbatch가 PATH에 없습니다. CARIS HIPS and SIPS를 설치하세요.")
+            self._caris_detail.setWordWrap(True)
+            sl.addWidget(self._caris_detail, 1)
 
-        layout.addWidget(status_frame)
+        layout.addWidget(self._status_frame)
 
         # Preset selector
         preset_row = QHBoxLayout()
         preset_row.setSpacing(Space.SM)
-        preset_lbl = QLabel("프리셋")
-        preset_lbl.setStyleSheet(f"color: {Dark.MUTED}; font-size: {Font.SM}px;")
-        preset_row.addWidget(preset_lbl)
+        self._preset_lbl = QLabel("프리셋")
+        preset_row.addWidget(self._preset_lbl)
 
         self._preset = QComboBox()
         self._preset.setStyleSheet(f"""
             QComboBox {{
-                background: {Dark.DARK}; color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER}; border-radius: {Radius.SM}px;
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
                 padding: 6px 10px; font-size: {Font.SM}px; min-width: 200px;
             }}
             QComboBox::drop-down {{ border: none; }}
             QComboBox QAbstractItemView {{
-                background: {Dark.DARK}; color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER}; selection-background-color: {Dark.NAVY};
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; selection-background-color: {c().NAVY};
             }}
         """)
         self._preset.addItem("-- 선택 --", None)
@@ -186,22 +209,21 @@ class _CLIAutomationTab(QWidget):
         preset_row.addWidget(self._preset, 1)
 
         # Drive letter selector
-        drive_lbl = QLabel("드라이브")
-        drive_lbl.setStyleSheet(f"color: {Dark.MUTED}; font-size: {Font.SM}px;")
-        preset_row.addWidget(drive_lbl)
+        self._drive_lbl = QLabel("드라이브")
+        preset_row.addWidget(self._drive_lbl)
 
         self._drive = QComboBox()
         self._drive.setFixedWidth(70)
         self._drive.setStyleSheet(f"""
             QComboBox {{
-                background: {Dark.DARK}; color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER}; border-radius: {Radius.SM}px;
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
                 padding: 6px 8px; font-size: {Font.SM}px;
             }}
             QComboBox::drop-down {{ border: none; }}
             QComboBox QAbstractItemView {{
-                background: {Dark.DARK}; color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER}; selection-background-color: {Dark.NAVY};
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; selection-background-color: {c().NAVY};
             }}
         """)
         # Detect available drives
@@ -219,16 +241,18 @@ class _CLIAutomationTab(QWidget):
         layout.addLayout(preset_row)
 
         # Input configuration
-        grp = QGroupBox("입력 설정")
+        self._grp = QGroupBox("입력 설정")
+        grp = self._grp
         grp.setStyleSheet(f"""
             QGroupBox {{
-                color: {Dark.TEXT};
+                color: {c().TEXT};
                 font-size: {Font.SM}px;
                 font-weight: {Font.SEMIBOLD};
-                border: 1px solid {Dark.BORDER};
+                border: none;
                 border-radius: {Radius.BASE}px;
                 margin-top: 12px;
                 padding-top: 18px;
+                background: {c().DARK};
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
@@ -254,15 +278,15 @@ class _CLIAutomationTab(QWidget):
         self._show_advanced = QCheckBox("고급 설정 (HIPS/GSF/조석 수동 지정)")
         self._show_advanced.setStyleSheet(f"""
             QCheckBox {{
-                color: {Dark.DIM}; font-size: {Font.XS}px; spacing: 6px;
+                color: {c().MUTED}; font-size: {Font.XS}px; spacing: 6px;
             }}
             QCheckBox::indicator {{
                 width: 14px; height: 14px;
-                border: 1px solid {Dark.BORDER}; border-radius: 3px;
-                background: {Dark.DARK};
+                border: 1px solid {c().BORDER}; border-radius: 3px;
+                background: {c().DARK};
             }}
             QCheckBox::indicator:checked {{
-                background: {Dark.CYAN}; border-color: {Dark.CYAN};
+                background: {c().CYAN}; border-color: {c().CYAN};
             }}
         """)
         self._show_advanced.toggled.connect(self._toggle_advanced)
@@ -278,14 +302,14 @@ class _CLIAutomationTab(QWidget):
         adv_layout.addWidget(self._hips_input)
 
         hint = QLabel("비워두면 Raw 데이터에서 자동 생성됩니다")
-        hint.setStyleSheet(f"color: {Dark.DIM}; font-size: {Font.XS}px; padding-left: 124px;")
+        hint.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.XS}px; padding-left: 124px;")
         adv_layout.addWidget(hint)
 
         self._gsf_input = _PathInput("GSF 폴더", is_dir=True)
         adv_layout.addWidget(self._gsf_input)
 
         gsf_hint = QLabel("비워두면 CARIS에서 자동 Export 후 탐지됩니다")
-        gsf_hint.setStyleSheet(f"color: {Dark.DIM}; font-size: {Font.XS}px; padding-left: 124px;")
+        gsf_hint.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.XS}px; padding-left: 124px;")
         adv_layout.addWidget(gsf_hint)
 
         self._tide_input = _PathInput("조석 파일", "Tide (*.tid *.txt)")
@@ -297,35 +321,35 @@ class _CLIAutomationTab(QWidget):
         meta_row = QHBoxLayout()
         meta_row.setSpacing(Space.MD)
 
-        name_lbl = QLabel("프로젝트명")
-        name_lbl.setFixedWidth(120)
-        name_lbl.setStyleSheet(f"color: {Dark.MUTED}; font-size: {Font.SM}px;")
-        meta_row.addWidget(name_lbl)
+        self._name_lbl = QLabel("프로젝트명")
+        self._name_lbl.setFixedWidth(120)
+        meta_row.addWidget(self._name_lbl)
 
         self._project_name = QLineEdit()
         self._project_name.setPlaceholderText("예: TAEAN ECR 2026")
         self._project_name.setStyleSheet(f"""
             QLineEdit {{
-                background: {Dark.DARK}; color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER}; border-radius: {Radius.SM}px;
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
                 padding: 6px 10px; font-size: {Font.SM}px;
             }}
+            QLineEdit:focus {{ border-color: {c().GREEN}; }}
         """)
         meta_row.addWidget(self._project_name, 1)
 
-        area_lbl = QLabel("측량 구역")
-        area_lbl.setFixedWidth(80)
-        area_lbl.setStyleSheet(f"color: {Dark.MUTED}; font-size: {Font.SM}px;")
-        meta_row.addWidget(area_lbl)
+        self._area_lbl = QLabel("측량 구역")
+        self._area_lbl.setFixedWidth(80)
+        meta_row.addWidget(self._area_lbl)
 
         self._survey_area = QLineEdit()
         self._survey_area.setPlaceholderText("예: Area A")
         self._survey_area.setStyleSheet(f"""
             QLineEdit {{
-                background: {Dark.DARK}; color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER}; border-radius: {Radius.SM}px;
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
                 padding: 6px 10px; font-size: {Font.SM}px;
             }}
+            QLineEdit:focus {{ border-color: {c().GREEN}; }}
         """)
         meta_row.addWidget(self._survey_area, 1)
 
@@ -335,9 +359,8 @@ class _CLIAutomationTab(QWidget):
         grid_row = QHBoxLayout()
         grid_row.setSpacing(Space.MD)
 
-        res_lbl = QLabel("Grid 해상도 (m)")
-        res_lbl.setStyleSheet(f"color: {Dark.MUTED}; font-size: {Font.SM}px;")
-        grid_row.addWidget(res_lbl)
+        self._res_lbl = QLabel("Grid 해상도 (m)")
+        grid_row.addWidget(self._res_lbl)
 
         self._resolution = QDoubleSpinBox()
         self._resolution.setRange(0.1, 100.0)
@@ -345,12 +368,13 @@ class _CLIAutomationTab(QWidget):
         self._resolution.setSingleStep(0.5)
         self._resolution.setStyleSheet(f"""
             QDoubleSpinBox {{
-                background: {Dark.DARK};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: {Radius.SM}px;
                 padding: 4px 8px;
             }}
+            QDoubleSpinBox:focus {{ border-color: {c().GREEN}; }}
         """)
         grid_row.addWidget(self._resolution)
 
@@ -362,19 +386,19 @@ class _CLIAutomationTab(QWidget):
         self._skip_caris = QCheckBox("CARIS 파이프라인 스킵 (기존 서페이스 이미지로 PPTX만 생성)")
         self._skip_caris.setStyleSheet(f"""
             QCheckBox {{
-                color: {Dark.MUTED};
+                color: {c().MUTED};
                 font-size: {Font.SM}px;
                 spacing: 6px;
             }}
             QCheckBox::indicator {{
                 width: 16px; height: 16px;
-                border: 1px solid {Dark.BORDER};
+                border: 1px solid {c().BORDER};
                 border-radius: 3px;
-                background: {Dark.DARK};
+                background: {c().DARK};
             }}
             QCheckBox::indicator:checked {{
-                background: {Dark.CYAN};
-                border-color: {Dark.CYAN};
+                background: {c().CYAN};
+                border-color: {c().CYAN};
             }}
         """)
         gl.addWidget(self._skip_caris)
@@ -382,27 +406,26 @@ class _CLIAutomationTab(QWidget):
         layout.addWidget(grp)
 
         # Pipeline steps preview
-        steps_label = QLabel("파이프라인 단계")
-        steps_label.setStyleSheet(f"""
-            color: {Dark.TEXT};
-            font-size: {Font.SM}px;
-            font-weight: {Font.SEMIBOLD};
-        """)
-        layout.addWidget(steps_label)
+        self._steps_label = QLabel("파이프라인 단계")
+        layout.addWidget(self._steps_label)
 
         steps_info = [
             ("Phase 1. 사전검증", "HIPS/Vessel/입력 파일 존재 및 carisbatch 확인"),
-            ("Phase 2. CARIS 파이프라인", "Import → Georeference(TPU) → Filter → Grid → Render → Export"),
+            ("Phase 2. CARIS 파이프라인", "Import > Georeference(TPU) > Filter > Grid > Render > Export"),
             ("Phase 3. 메타데이터 수집", "GSF/HVF에서 장비정보, 라인정보, 오프셋 추출"),
             ("Phase 4. DQR PPTX 생성", "11슬라이드 Daily QC Report 자동 생성"),
         ]
+
+        self._step_frames: list[QFrame] = []
+        self._step_title_labels: list[QLabel] = []
+        self._step_desc_labels: list[QLabel] = []
 
         for title, desc in steps_info:
             step_frame = QFrame()
             step_frame.setStyleSheet(f"""
                 QFrame {{
-                    background: {Dark.DARK};
-                    border: 1px solid {Dark.BORDER};
+                    background: {c().DARK};
+                    border: none;
                     border-radius: {Radius.SM}px;
                     padding: 8px 12px;
                 }}
@@ -412,14 +435,17 @@ class _CLIAutomationTab(QWidget):
             step_layout.setSpacing(2)
 
             t = QLabel(title)
-            t.setStyleSheet(f"color: {Dark.TEXT}; font-size: {Font.SM}px; font-weight: {Font.MEDIUM}; background: transparent; border: none;")
+            t.setStyleSheet(f"color: {c().TEXT}; font-size: {Font.SM}px; font-weight: {Font.MEDIUM}; background: transparent; border: none;")
             step_layout.addWidget(t)
 
             d = QLabel(desc)
-            d.setStyleSheet(f"color: {Dark.DIM}; font-size: {Font.XS}px; background: transparent; border: none;")
+            d.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.XS}px; background: transparent; border: none;")
             step_layout.addWidget(d)
 
             layout.addWidget(step_frame)
+            self._step_frames.append(step_frame)
+            self._step_title_labels.append(t)
+            self._step_desc_labels.append(d)
 
         # Progress
         self._progress = QProgressBar()
@@ -428,19 +454,19 @@ class _CLIAutomationTab(QWidget):
         self._progress.setFixedHeight(4)
         self._progress.setStyleSheet(f"""
             QProgressBar {{
-                background: {Dark.BORDER};
+                background: {c().DARK};
                 border: none;
                 border-radius: 2px;
             }}
             QProgressBar::chunk {{
-                background: {Dark.CYAN};
+                background: {c().CYAN};
                 border-radius: 2px;
             }}
         """)
         layout.addWidget(self._progress)
 
         self._status_label = QLabel("")
-        self._status_label.setStyleSheet(f"color: {Dark.DIM}; font-size: {Font.XS}px;")
+        self._status_label.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.XS}px;")
         layout.addWidget(self._status_label)
 
         # Log output
@@ -450,9 +476,9 @@ class _CLIAutomationTab(QWidget):
         self._log.setVisible(False)
         self._log.setStyleSheet(f"""
             QTextEdit {{
-                background: {Dark.DARK};
-                color: {Dark.DIM};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: {Radius.SM}px;
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: {Font.XS}px;
@@ -468,18 +494,213 @@ class _CLIAutomationTab(QWidget):
         self._run_btn = QPushButton("DQR 자동 생성")
         self._run_btn.setFixedSize(180, 38)
         self._run_btn.setCursor(Qt.PointingHandCursor)
-        self._run_btn.setStyleSheet(BTN_PRIMARY)
+        self._run_btn.setStyleSheet(_btn_primary_qss())
         self._run_btn.clicked.connect(self._on_run)
         btn_row.addWidget(self._run_btn)
 
         layout.addLayout(btn_row)
         layout.addStretch()
 
-        scroll.setWidget(content)
+        self._scroll.setWidget(content)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll)
+        outer.addWidget(self._scroll)
+
+        self._apply_styles()
+
+    # ── Theme ──────────────────────────────────────────
+
+    def _apply_styles(self):
+        _scroll_qss = f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            QScrollArea > QWidget > QWidget {{ background: transparent; }}
+            QScrollBar:vertical {{
+                background: transparent; width: 6px; margin: 0;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {c().SLATE}; border-radius: 3px; min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{ background: {c().MUTED}; }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        """
+        self._scroll.setStyleSheet(_scroll_qss)
+
+        # CARIS status frame
+        self._status_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {c().DARK};
+                border: none;
+                border-radius: {Radius.BASE}px;
+                padding: {Space.MD}px;
+            }}
+        """)
+        if self._caris_available:
+            self._caris_icon.setStyleSheet(f"""
+                color: {c().GREEN}; font-size: {Font.SM}px;
+                font-weight: {Font.BOLD}; background: transparent;
+            """)
+        else:
+            self._caris_icon.setStyleSheet(f"""
+                color: {c().ORANGE}; font-size: {Font.SM}px;
+                font-weight: {Font.BOLD}; background: transparent;
+            """)
+        self._caris_detail.setStyleSheet(
+            f"color: {c().MUTED}; font-size: {Font.XS}px; background: transparent;")
+
+        # Preset / Drive labels + combos
+        _combo_qss = f"""
+            QComboBox {{
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
+                padding: 6px 10px; font-size: {Font.SM}px; min-width: 200px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; selection-background-color: {c().NAVY};
+            }}
+        """
+        _small_label_qss = f"color: {c().MUTED}; font-size: {Font.SM}px;"
+        self._preset_lbl.setStyleSheet(_small_label_qss)
+        self._preset.setStyleSheet(_combo_qss)
+        self._drive_lbl.setStyleSheet(_small_label_qss)
+        self._drive.setStyleSheet(f"""
+            QComboBox {{
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
+                padding: 6px 8px; font-size: {Font.SM}px;
+            }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; selection-background-color: {c().NAVY};
+            }}
+        """)
+
+        # QGroupBox
+        if hasattr(self, "_grp"):
+            self._grp.setStyleSheet(f"""
+                QGroupBox {{
+                    color: {c().TEXT};
+                    font-size: {Font.SM}px;
+                    font-weight: {Font.SEMIBOLD};
+                    border: none;
+                    border-radius: {Radius.BASE}px;
+                    margin-top: 12px;
+                    padding-top: 18px;
+                    background: {c().DARK};
+                }}
+                QGroupBox::title {{
+                    subcontrol-origin: margin;
+                    left: 12px;
+                    padding: 0 4px;
+                }}
+            """)
+
+        # PathInput widgets
+        for pi in (self._raw_input, self._vessel_input, self._output_input,
+                   self._hips_input, self._gsf_input, self._tide_input):
+            if hasattr(pi, "refresh_theme"):
+                pi.refresh_theme()
+
+        # Checkbox
+        _checkbox_qss = f"""
+            QCheckBox {{
+                color: {c().MUTED}; font-size: {Font.XS}px; spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 14px; height: 14px;
+                border: 1px solid {c().BORDER}; border-radius: 3px;
+                background: {c().DARK};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {c().CYAN}; border-color: {c().CYAN};
+            }}
+        """
+        self._show_advanced.setStyleSheet(_checkbox_qss)
+        self._skip_caris.setStyleSheet(f"""
+            QCheckBox {{
+                color: {c().MUTED}; font-size: {Font.SM}px; spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px; height: 16px;
+                border: 1px solid {c().BORDER}; border-radius: 3px;
+                background: {c().DARK};
+            }}
+            QCheckBox::indicator:checked {{
+                background: {c().CYAN}; border-color: {c().CYAN};
+            }}
+        """)
+
+        # Metadata labels + inputs
+        self._name_lbl.setStyleSheet(_small_label_qss)
+        self._area_lbl.setStyleSheet(_small_label_qss)
+        _lineedit_qss = f"""
+            QLineEdit {{
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
+                padding: 6px 10px; font-size: {Font.SM}px;
+            }}
+            QLineEdit:focus {{ border-color: {c().GREEN}; }}
+        """
+        self._project_name.setStyleSheet(_lineedit_qss)
+        self._survey_area.setStyleSheet(_lineedit_qss)
+
+        # Grid resolution
+        self._res_lbl.setStyleSheet(_small_label_qss)
+        self._resolution.setStyleSheet(f"""
+            QDoubleSpinBox {{
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
+                padding: 4px 8px;
+            }}
+            QDoubleSpinBox:focus {{ border-color: {c().GREEN}; }}
+        """)
+
+        # Steps label + step cards
+        self._steps_label.setStyleSheet(f"""
+            color: {c().TEXT}; font-size: {Font.SM}px;
+            font-weight: {Font.SEMIBOLD};
+        """)
+        for frame in getattr(self, "_step_frames", []):
+            frame.setStyleSheet(f"""
+                QFrame {{
+                    background: {c().DARK}; border: none;
+                    border-radius: {Radius.SM}px; padding: 8px 12px;
+                }}
+            """)
+        for lbl in getattr(self, "_step_title_labels", []):
+            lbl.setStyleSheet(
+                f"color: {c().TEXT}; font-size: {Font.SM}px; font-weight: {Font.MEDIUM}; "
+                f"background: transparent; border: none;")
+        for lbl in getattr(self, "_step_desc_labels", []):
+            lbl.setStyleSheet(
+                f"color: {c().MUTED}; font-size: {Font.XS}px; background: transparent; border: none;")
+
+        # Progress / status / log / run button
+        self._progress.setStyleSheet(f"""
+            QProgressBar {{
+                background: {c().DARK}; border: none; border-radius: 2px;
+            }}
+            QProgressBar::chunk {{
+                background: {c().CYAN}; border-radius: 2px;
+            }}
+        """)
+        self._status_label.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.XS}px;")
+        self._log.setStyleSheet(f"""
+            QTextEdit {{
+                background: {c().DARK}; color: {c().TEXT};
+                border: 1px solid {c().BORDER}; border-radius: {Radius.SM}px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: {Font.XS}px; padding: 8px;
+            }}
+        """)
+        self._run_btn.setStyleSheet(_btn_primary_qss())
+
+    def on_theme_changed(self):
+        """Re-apply theme to all inline-styled widgets."""
+        self._apply_styles()
 
     def _on_preset_changed(self, index: int):
         preset_id = self._preset.currentData()
@@ -598,7 +819,7 @@ class _CLIAutomationTab(QWidget):
         # Auto-check skip CARIS if no .hips found
         if not hips:
             self._skip_caris.setChecked(True)
-            found.append("HIPS 없음 → CARIS 스킵 자동 체크")
+            found.append("HIPS 없음 -> CARIS 스킵 자동 체크")
 
         # Show detection results
         if found:
@@ -606,7 +827,7 @@ class _CLIAutomationTab(QWidget):
                 f"자동 탐지 완료: {', '.join(found[:4])}", "success")
         else:
             self.toast_requested.emit(
-                "탐지된 파일 없음 — 수동으로 경로를 지정하세요", "warning")
+                "No files detected - please specify paths manually", "warning")
 
     def _on_run(self):
         skip = self._skip_caris.isChecked()
@@ -701,82 +922,93 @@ class _GUIOnlyTab(QWidget):
     def __init__(self, title: str, steps: list[tuple[str, str]],
                  note: str = "", parent=None):
         super().__init__(parent)
+        self._step_frames: list[QFrame] = []
+        self._step_title_labels: list[QLabel] = []
+        self._step_desc_labels: list[QLabel] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Space.LG, Space.LG, Space.LG, Space.LG)
         layout.setSpacing(Space.MD)
 
         # Badge
-        badge = QLabel("GUI 전용")
-        badge.setFixedWidth(80)
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setStyleSheet(f"""
-            background: {Dark.ORANGE};
-            color: {Dark.BG};
-            font-size: {Font.XS}px;
-            font-weight: {Font.BOLD};
-            border-radius: {Radius.SM}px;
-            padding: 4px 8px;
-        """)
-        layout.addWidget(badge)
+        self._badge = QLabel("GUI 전용")
+        self._badge.setFixedWidth(80)
+        self._badge.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._badge)
 
         # Title
-        title_lbl = QLabel(title)
-        title_lbl.setStyleSheet(f"""
-            color: {Dark.TEXT};
-            font-size: {Font.LG}px;
-            font-weight: {Font.SEMIBOLD};
-        """)
-        layout.addWidget(title_lbl)
+        self._title_lbl = QLabel(title)
+        layout.addWidget(self._title_lbl)
 
-        desc = QLabel(
+        self._desc = QLabel(
             "이 기능은 carisbatch CLI로 자동화할 수 없으며,\n"
             "CARIS HIPS and SIPS GUI에서 직접 수행해야 합니다."
         )
-        desc.setStyleSheet(f"color: {Dark.MUTED}; font-size: {Font.SM}px;")
-        desc.setWordWrap(True)
-        layout.addWidget(desc)
+        self._desc.setWordWrap(True)
+        layout.addWidget(self._desc)
 
         # Steps
         for i, (step_title, step_desc) in enumerate(steps, 1):
             step_frame = QFrame()
-            step_frame.setStyleSheet(f"""
-                QFrame {{
-                    background: {Dark.DARK};
-                    border: 1px solid {Dark.BORDER};
-                    border-radius: {Radius.SM}px;
-                    padding: 10px 14px;
-                }}
-            """)
             sl = QVBoxLayout(step_frame)
             sl.setContentsMargins(0, 0, 0, 0)
             sl.setSpacing(2)
 
             t = QLabel(f"{i}. {step_title}")
-            t.setStyleSheet(f"color: {Dark.TEXT}; font-size: {Font.SM}px; font-weight: {Font.MEDIUM}; background: transparent; border: none;")
             sl.addWidget(t)
 
             d = QLabel(step_desc)
             d.setWordWrap(True)
-            d.setStyleSheet(f"color: {Dark.DIM}; font-size: {Font.XS}px; background: transparent; border: none;")
             sl.addWidget(d)
 
             layout.addWidget(step_frame)
+            self._step_frames.append(step_frame)
+            self._step_title_labels.append(t)
+            self._step_desc_labels.append(d)
 
+        self._note_lbl = None
         if note:
-            note_lbl = QLabel(note)
-            note_lbl.setWordWrap(True)
-            note_lbl.setStyleSheet(f"""
-                color: {Dark.MUTED};
-                font-size: {Font.XS}px;
-                padding: {Space.SM}px;
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
-                border-radius: {Radius.SM}px;
-            """)
-            layout.addWidget(note_lbl)
+            self._note_lbl = QLabel(note)
+            self._note_lbl.setWordWrap(True)
+            layout.addWidget(self._note_lbl)
 
         layout.addStretch()
+        self._apply_styles()
+
+    def _apply_styles(self):
+        self._badge.setStyleSheet(f"""
+            background: {c().ORANGE}; color: {c().BG};
+            font-size: {Font.XS}px; font-weight: {Font.BOLD};
+            border-radius: {Radius.SM}px; padding: 4px 8px;
+        """)
+        self._title_lbl.setStyleSheet(f"""
+            color: {c().TEXT}; font-size: {Font.LG}px;
+            font-weight: {Font.SEMIBOLD};
+        """)
+        self._desc.setStyleSheet(f"color: {c().MUTED}; font-size: {Font.SM}px;")
+        for frame in self._step_frames:
+            frame.setStyleSheet(f"""
+                QFrame {{
+                    background: {c().DARK}; border: none;
+                    border-radius: {Radius.SM}px; padding: 10px 14px;
+                }}
+            """)
+        for lbl in self._step_title_labels:
+            lbl.setStyleSheet(
+                f"color: {c().TEXT}; font-size: {Font.SM}px; font-weight: {Font.MEDIUM}; "
+                f"background: transparent; border: none;")
+        for lbl in self._step_desc_labels:
+            lbl.setStyleSheet(
+                f"color: {c().MUTED}; font-size: {Font.XS}px; background: transparent; border: none;")
+        if self._note_lbl:
+            self._note_lbl.setStyleSheet(f"""
+                color: {c().MUTED}; font-size: {Font.XS}px; padding: {Space.SM}px;
+                background: {c().DARK}; border: none; border-radius: {Radius.SM}px;
+            """)
+
+    def on_theme_changed(self):
+        """Re-apply theme to all inline-styled widgets."""
+        self._apply_styles()
 
 
 class DQRPanel(QWidget):
@@ -797,25 +1029,25 @@ class DQRPanel(QWidget):
         tabs.setStyleSheet(f"""
             QTabWidget::pane {{
                 border: none;
-                background: {Dark.BG};
+                background: {c().BG};
             }}
             QTabBar::tab {{
-                background: {Dark.DARK};
-                color: {Dark.MUTED};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                color: {c().MUTED};
+                border: 1px solid {c().BORDER};
                 border-bottom: none;
                 padding: 8px 20px;
                 font-size: {Font.SM}px;
                 min-width: 120px;
             }}
             QTabBar::tab:selected {{
-                background: {Dark.BG};
-                color: {Dark.TEXT};
-                border-bottom: 2px solid {Dark.CYAN};
+                background: {c().BG};
+                color: {c().TEXT};
+                border-bottom: 2px solid {c().CYAN};
             }}
             QTabBar::tab:hover {{
-                color: {Dark.TEXT};
-                background: {Dark.NAVY};
+                color: {c().TEXT};
+                background: {c().NAVY};
             }}
         """)
 
@@ -831,7 +1063,7 @@ class DQRPanel(QWidget):
                 ("CARIS 실행", "HIPS and SIPS를 열고 프로젝트를 로드합니다"),
                 ("서페이스 선택", "비교할 HIPS Grid 서페이스를 선택합니다"),
                 ("Tools > Report > Line QC", "메뉴에서 Line QC Report를 실행합니다"),
-                ("QC Report Wizard", "서페이스 → 라인/기준 → 그룹핑/출력 옵션 순서로 설정"),
+                ("QC Report Wizard", "서페이스 > 라인/기준 > 그룹핑/출력 옵션 순서로 설정"),
                 ("결과 확인", "Count, Max, Min, Mean, Std Dev, S-44 적합률 등 통계 확인"),
             ],
             note="XML 템플릿으로 설정을 저장/재사용할 수 있습니다.\n"
@@ -855,3 +1087,51 @@ class DQRPanel(QWidget):
         tabs.addTab(flier_tab, "Flier Finder (GUI)")
 
         layout.addWidget(tabs)
+
+        self._tabs = tabs
+        self._apply_styles()
+
+    # ── Theme ──────────────────────────────────────────
+
+    def _apply_styles(self):
+        self._tabs.setStyleSheet(f"""
+            QTabWidget {{
+                background: {c().BG};
+            }}
+            QTabWidget::pane {{
+                border: none;
+                background: {c().BG};
+            }}
+            QTabBar {{
+                background: {c().BG};
+            }}
+            QTabBar::tab {{
+                background: {c().DARK};
+                color: {c().MUTED};
+                border: 1px solid {c().BORDER};
+                border-bottom: none;
+                padding: 8px 20px;
+                font-size: {Font.SM}px;
+                min-width: 120px;
+            }}
+            QTabBar::tab:selected {{
+                background: {c().BG};
+                color: {c().TEXT};
+                border-bottom: 2px solid {c().CYAN};
+            }}
+            QTabBar::tab:hover {{
+                color: {c().TEXT};
+                background: {c().NAVY};
+            }}
+        """)
+
+    def on_theme_changed(self):
+        """Re-apply theme to all inline-styled widgets."""
+        self._apply_styles()
+        for i in range(self._tabs.count()):
+            tab = self._tabs.widget(i)
+            if hasattr(tab, "on_theme_changed") and callable(tab.on_theme_changed):
+                try:
+                    tab.on_theme_changed()
+                except Exception:
+                    pass

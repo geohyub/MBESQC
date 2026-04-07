@@ -25,7 +25,8 @@ from PySide6.QtGui import QShortcut, QKeySequence
 
 from geoview_pyside6 import GeoViewApp, Category
 from geoview_pyside6.icons import icon
-from geoview_pyside6.constants import Dark, Font
+from geoview_pyside6.constants import Font
+from geoview_pyside6.theme_aware import c
 from geoview_pyside6.help import set_help
 
 from desktop.app_controller import AppController
@@ -63,6 +64,9 @@ class MBESQCApp(GeoViewApp):
 
         # Connect navigation signals
         self._connect_navigation()
+
+        # Connect analysis panel toast signal
+        self._analysis.toast_requested.connect(self.toast_mgr.show_toast)
 
         # Keyboard shortcuts
         self._setup_shortcuts()
@@ -231,9 +235,9 @@ class MBESQCApp(GeoViewApp):
         menu = QMenu(self)
         menu.setStyleSheet(f"""
             QMenu {{
-                background: {Dark.DARK};
-                color: {Dark.TEXT_SEC};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: 6px;
                 padding: 4px;
             }}
@@ -242,7 +246,7 @@ class MBESQCApp(GeoViewApp):
                 border-radius: 4px;
             }}
             QMenu::item:selected {{
-                background: {Dark.NAVY};
+                background: {c().NAVY};
             }}
         """)
 
@@ -315,6 +319,9 @@ class MBESQCApp(GeoViewApp):
         QShortcut(QKeySequence("Ctrl+H"), self, lambda: self._switch_to("dashboard"))
         QShortcut(QKeySequence("F5"), self, self._on_refresh)
         QShortcut(QKeySequence("Escape"), self, self._on_escape)
+        QShortcut(QKeySequence("Ctrl+E"), self, self._on_shortcut_export)
+        QShortcut(QKeySequence("Ctrl+S"), self, self._on_shortcut_save_chart)
+        QShortcut(QKeySequence("Ctrl+R"), self, self._on_shortcut_reanalyze)
 
     def _on_refresh(self):
         """Refresh current panel."""
@@ -334,6 +341,37 @@ class MBESQCApp(GeoViewApp):
                 self._on_navigate_to_project(pid)
         elif panel == self._project_detail:
             self._switch_to("dashboard")
+
+    def _on_shortcut_export(self):
+        """Ctrl+E: Export from current project detail or analysis."""
+        panel = self.content_stack.currentWidget()
+        if panel == self._project_detail:
+            pid = self._project_detail.get_project_id()
+            if pid:
+                self._show_export_menu(pid)
+        elif panel == self._analysis:
+            pid = self._analysis.get_project_id()
+            if pid:
+                self._show_export_menu(pid)
+
+    def _on_shortcut_save_chart(self):
+        """Ctrl+S: Save chart from analysis panel."""
+        panel = self.content_stack.currentWidget()
+        if panel == self._analysis and hasattr(self._analysis, '_chart'):
+            chart = self._analysis._chart
+            if hasattr(chart, 'save_chart'):
+                chart.save_chart()
+            else:
+                self.controller.show_toast(
+                    self.t("toast.chart_save_unavailable", "현재 차트 저장을 사용할 수 없습니다"),
+                    "warning",
+                )
+
+    def _on_shortcut_reanalyze(self):
+        """Ctrl+R: Re-run QC analysis."""
+        panel = self.content_stack.currentWidget()
+        if panel == self._analysis:
+            self._analysis._run_qc()
 
     # ── TopBar action setup ──
 

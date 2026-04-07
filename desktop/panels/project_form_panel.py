@@ -14,23 +14,64 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius, BTN_PRIMARY, BTN_SECONDARY
+from geoview_pyside6.constants import Font, Space, Radius
+from geoview_pyside6.theme_aware import c
 
 from desktop.services.data_service import DataService
 from desktop.services.insight_service import build_project_context, format_number
 
 
-_INPUT_STYLE = f"""
+def _btn_primary_qss() -> str:
+    """c()-based primary button QSS."""
+    return f"""
+        QPushButton {{
+            background: {c().CYAN};
+            color: #ffffff;
+            border: none;
+            border-radius: {Radius.BASE}px;
+            font-size: {Font.SM}px;
+            font-weight: {Font.MEDIUM};
+            padding: 7px 18px;
+        }}
+        QPushButton:hover {{ background: {c().CYAN_H}; }}
+        QPushButton:disabled {{
+            background: {c().SLATE};
+            color: {c().DIM};
+        }}
+    """
+
+
+def _btn_secondary_qss() -> str:
+    """c()-based secondary button QSS."""
+    return f"""
+        QPushButton {{
+            background: transparent;
+            color: {c().MUTED};
+            border: 1px solid {c().BORDER};
+            border-radius: {Radius.BASE}px;
+            font-size: {Font.SM}px;
+            padding: 7px 18px;
+        }}
+        QPushButton:hover {{
+            background: {c().DARK};
+            color: {c().TEXT};
+            border-color: {c().BORDER_H};
+        }}
+    """
+
+
+def _input_style() -> str:
+    return f"""
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-        background: {Dark.DARK};
-        color: {Dark.TEXT};
-        border: 1px solid {Dark.BORDER};
+        background: {c().DARK};
+        color: {c().TEXT};
+        border: 1px solid {c().BORDER};
         border-radius: {Radius.SM}px;
         padding: 6px 10px;
         font-size: {Font.SM}px;
     }}
     QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
-        border-color: {Dark.CYAN};
+        border-color: {c().CYAN};
     }}
 """
 
@@ -57,13 +98,21 @@ class ProjectFormPanel(QWidget):
         scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
             QScrollBar:vertical {{
-                background: {Dark.BG};
-                width: 8px;
+                background: transparent;
+                width: 6px;
+                margin: 0;
             }}
             QScrollBar::handle:vertical {{
-                background: {Dark.SLATE};
-                border-radius: 4px;
-                min-height: 30px;
+                background: {c().SLATE};
+                border-radius: 3px;
+                min-height: 20px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {c().MUTED};
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height: 0;
             }}
         """)
 
@@ -77,7 +126,7 @@ class ProjectFormPanel(QWidget):
         self._title_label.setStyleSheet(f"""
             font-size: {Font.XL}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         layout.addWidget(self._title_label)
@@ -89,14 +138,14 @@ class ProjectFormPanel(QWidget):
 
         label_style = f"""
             font-size: {Font.SM}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """
 
         # Project name
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("프로젝트 이름 (예: EDF Phase 1)")
-        self._name_input.setStyleSheet(_INPUT_STYLE)
+        self._name_input.setStyleSheet(_input_style())
         name_label = QLabel("프로젝트 이름")
         name_label.setStyleSheet(label_style)
         form.addRow(name_label, self._name_input)
@@ -104,7 +153,7 @@ class ProjectFormPanel(QWidget):
         # Vessel
         self._vessel_input = QLineEdit()
         self._vessel_input.setPlaceholderText("선박명 (예: Fugro Equator)")
-        self._vessel_input.setStyleSheet(_INPUT_STYLE)
+        self._vessel_input.setStyleSheet(_input_style())
         vessel_label = QLabel("선박명")
         vessel_label.setStyleSheet(label_style)
         form.addRow(vessel_label, self._vessel_input)
@@ -113,7 +162,7 @@ class ProjectFormPanel(QWidget):
         pds_row = QHBoxLayout()
         self._pds_input = QLineEdit()
         self._pds_input.setPlaceholderText("PDS 파일 디렉토리")
-        self._pds_input.setStyleSheet(_INPUT_STYLE)
+        self._pds_input.setStyleSheet(_input_style())
         pds_browse = QPushButton("...")
         pds_browse.setFixedSize(36, 30)
         pds_browse.setStyleSheet(self._browse_btn_style())
@@ -128,7 +177,7 @@ class ProjectFormPanel(QWidget):
         gsf_row = QHBoxLayout()
         self._gsf_input = QLineEdit()
         self._gsf_input.setPlaceholderText("GSF 파일 디렉토리 (선택)")
-        self._gsf_input.setStyleSheet(_INPUT_STYLE)
+        self._gsf_input.setStyleSheet(_input_style())
         gsf_browse = QPushButton("...")
         gsf_browse.setFixedSize(36, 30)
         gsf_browse.setStyleSheet(self._browse_btn_style())
@@ -143,7 +192,7 @@ class ProjectFormPanel(QWidget):
         hvf_row = QHBoxLayout()
         self._hvf_input = QLineEdit()
         self._hvf_input.setPlaceholderText("HVF 파일 디렉토리 (선택)")
-        self._hvf_input.setStyleSheet(_INPUT_STYLE)
+        self._hvf_input.setStyleSheet(_input_style())
         hvf_browse = QPushButton("...")
         hvf_browse.setFixedSize(36, 30)
         hvf_browse.setStyleSheet(self._browse_btn_style())
@@ -159,7 +208,7 @@ class ProjectFormPanel(QWidget):
         self._cell_size.setRange(0.1, 100.0)
         self._cell_size.setValue(5.0)
         self._cell_size.setSuffix(" m")
-        self._cell_size.setStyleSheet(_INPUT_STYLE)
+        self._cell_size.setStyleSheet(_input_style())
         cell_label = QLabel("Cell Size")
         cell_label.setStyleSheet(label_style)
         form.addRow(cell_label, self._cell_size)
@@ -169,7 +218,7 @@ class ProjectFormPanel(QWidget):
         self._max_gsf.setRange(0, 9999)
         self._max_gsf.setValue(50)
         self._max_gsf.setSpecialValueText("전체")
-        self._max_gsf.setStyleSheet(_INPUT_STYLE)
+        self._max_gsf.setStyleSheet(_input_style())
         self._max_gsf.setToolTip("대용량 프로젝트에서 처리할 최대 GSF 파일 수 (0=전체)")
         gsf_limit_label = QLabel("Max GSF Files")
         gsf_limit_label.setStyleSheet(label_style)
@@ -180,7 +229,7 @@ class ProjectFormPanel(QWidget):
         self._max_pings.setRange(0, 999999)
         self._max_pings.setValue(0)
         self._max_pings.setSpecialValueText("전체")
-        self._max_pings.setStyleSheet(_INPUT_STYLE)
+        self._max_pings.setStyleSheet(_input_style())
         self._max_pings.setToolTip("파일당 최대 핑 수 (0=전체, 빠른 미리보기: 100)")
         pings_label = QLabel("Max Pings")
         pings_label.setStyleSheet(label_style)
@@ -189,7 +238,7 @@ class ProjectFormPanel(QWidget):
         # OffsetManager config
         om_row = QHBoxLayout()
         self._om_combo = QComboBox()
-        self._om_combo.setStyleSheet(_INPUT_STYLE)
+        self._om_combo.setStyleSheet(_input_style())
         self._om_combo.addItem("(연결 안 됨)", -1)
         self._om_combo.currentIndexChanged.connect(lambda *_: self._refresh_preview())
         om_row.addWidget(self._om_combo, 1)
@@ -210,8 +259,8 @@ class ProjectFormPanel(QWidget):
         self._preview_frame = QFrame()
         self._preview_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -223,7 +272,7 @@ class ProjectFormPanel(QWidget):
         preview_title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         preview_layout.addWidget(preview_title)
@@ -233,7 +282,7 @@ class ProjectFormPanel(QWidget):
         self._flow_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._flow_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         preview_layout.addWidget(self._flow_label)
@@ -243,7 +292,7 @@ class ProjectFormPanel(QWidget):
         self._readiness_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._readiness_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         preview_layout.addWidget(self._readiness_label)
@@ -253,7 +302,7 @@ class ProjectFormPanel(QWidget):
         self._offset_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._offset_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         preview_layout.addWidget(self._offset_label)
@@ -264,19 +313,19 @@ class ProjectFormPanel(QWidget):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        cancel_btn = QPushButton("취소")
-        cancel_btn.setFixedSize(100, 36)
-        cancel_btn.setCursor(Qt.PointingHandCursor)
-        cancel_btn.setStyleSheet(BTN_SECONDARY)
-        cancel_btn.clicked.connect(self.cancelled.emit)
-        btn_row.addWidget(cancel_btn)
+        self._cancel_btn = QPushButton("취소")
+        self._cancel_btn.setFixedSize(100, 36)
+        self._cancel_btn.setCursor(Qt.PointingHandCursor)
+        self._cancel_btn.setStyleSheet(_btn_secondary_qss())
+        self._cancel_btn.clicked.connect(self.cancelled.emit)
+        btn_row.addWidget(self._cancel_btn)
 
-        save_btn = QPushButton("저장")
-        save_btn.setFixedSize(100, 36)
-        save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.setStyleSheet(BTN_PRIMARY)
-        save_btn.clicked.connect(self._on_save)
-        btn_row.addWidget(save_btn)
+        self._save_btn = QPushButton("저장")
+        self._save_btn.setFixedSize(100, 36)
+        self._save_btn.setCursor(Qt.PointingHandCursor)
+        self._save_btn.setStyleSheet(_btn_primary_qss())
+        self._save_btn.clicked.connect(self._on_save)
+        btn_row.addWidget(self._save_btn)
 
         layout.addLayout(btn_row)
         layout.addStretch()
@@ -290,18 +339,67 @@ class ProjectFormPanel(QWidget):
         self._max_pings.valueChanged.connect(lambda *_: self._refresh_preview())
         self._cell_size.valueChanged.connect(lambda *_: self._refresh_preview())
         self._refresh_preview()
+        self._apply_styles()
+
+    # ── Theme ──────────────────────────────────────────
+
+    def _apply_styles(self):
+        self._title_label.setStyleSheet(f"""
+            font-size: {Font.XL}px;
+            font-weight: {Font.SEMIBOLD};
+            color: {c().TEXT_BRIGHT};
+            background: transparent;
+        """)
+        self._preview_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {c().DARK};
+                border: none;
+                border-radius: {Radius.SM}px;
+            }}
+        """)
+        label_style = f"""
+            font-size: {Font.SM}px;
+            color: {c().MUTED};
+            background: transparent;
+        """
+        for w in (self._flow_label,):
+            w.setStyleSheet(f"""
+                font-size: {Font.XS}px;
+                color: {c().TEXT};
+                background: transparent;
+            """)
+        for w in (self._readiness_label, self._offset_label):
+            w.setStyleSheet(f"""
+                font-size: {Font.XS}px;
+                color: {c().MUTED};
+                background: transparent;
+            """)
+        # Buttons
+        self._save_btn.setStyleSheet(_btn_primary_qss())
+        self._cancel_btn.setStyleSheet(_btn_secondary_qss())
+
+    def on_theme_changed(self):
+        """Re-apply theme to all inline-styled widgets."""
+        self._apply_styles()
+        for attr_name in dir(self):
+            obj = getattr(self, attr_name, None)
+            if obj and hasattr(obj, "refresh_theme") and callable(obj.refresh_theme):
+                try:
+                    obj.refresh_theme()
+                except Exception:
+                    pass
 
     def _browse_btn_style(self) -> str:
         return f"""
             QPushButton {{
-                background: {Dark.NAVY};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
+                background: {c().NAVY};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: {Radius.SM}px;
                 font-size: {Font.SM}px;
             }}
             QPushButton:hover {{
-                background: {Dark.SLATE};
+                background: {c().SLATE};
             }}
         """
 
@@ -354,14 +452,14 @@ class ProjectFormPanel(QWidget):
                 configs = OMClient.list_configs()
                 self._om_combo.clear()
                 self._om_combo.addItem("(선택 안 함)", -1)
-                for c in configs:
-                    role = c.get("role_label", "")
-                    review = c.get("review_label", "")
-                    readiness = c.get("readiness_label", "")
+                for cfg in configs:
+                    role = cfg.get("role_label", "")
+                    review = cfg.get("review_label", "")
+                    readiness = cfg.get("readiness_label", "")
                     suffix_parts = [part for part in (role, review, readiness) if part]
                     suffix = f" [{' / '.join(suffix_parts)}]" if suffix_parts else ""
-                    label = f"{c.get('vessel_name', '?')} — {c.get('project_name', '')}{suffix}"
-                    self._om_combo.addItem(label, c.get("id", -1))
+                    label = f"{cfg.get('vessel_name', '?')} - {cfg.get('project_name', '')}{suffix}"
+                    self._om_combo.addItem(label, cfg.get("id", -1))
             else:
                 self._om_combo.clear()
                 self._om_combo.addItem("(OffsetManager 미연결)", -1)

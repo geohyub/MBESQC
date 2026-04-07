@@ -347,6 +347,33 @@ def serialize_full_qc_result(result) -> dict:
                 for det in idet
             ]
 
+        # Per-cell data for crossline intersection map (downsampled)
+        cell_e = getattr(xq, "cell_eastings", None)
+        cell_n = getattr(xq, "cell_northings", None)
+        cell_d = getattr(xq, "cell_diffs", None)
+        cell_m = getattr(xq, "cell_mean_depths", None)
+        if cell_e is not None and len(cell_e) > 0:
+            max_map_pts = 5000
+            d["crossline"]["cell_eastings"] = _downsample(cell_e, max_map_pts).tolist()
+            d["crossline"]["cell_northings"] = _downsample(cell_n, max_map_pts).tolist()
+            d["crossline"]["cell_diffs"] = _downsample(cell_d, max_map_pts).tolist()
+            d["crossline"]["cell_mean_depths"] = _downsample(cell_m, max_map_pts).tolist()
+
+        # Per-line tracks for crossline map background
+        line_tracks = getattr(xq, "line_tracks", None)
+        if line_tracks:
+            track_data = []
+            for trk in line_tracks:
+                if trk is not None and len(trk) > 0:
+                    ds = _downsample(trk[:, 0], 500)
+                    dn = _downsample(trk[:, 1], 500)
+                    track_data.append({
+                        "eastings": ds.tolist(),
+                        "northings": dn.tolist(),
+                    })
+            if track_data:
+                d["crossline"]["line_tracks"] = track_data
+
     # ── Chart data arrays (downsampled for rendering) ──
     # Motion: attitude time series from first GSF
     if mq:

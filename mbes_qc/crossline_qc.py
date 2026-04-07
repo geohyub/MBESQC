@@ -29,6 +29,13 @@ class CrosslineResult:
     striping_amplitude: float = 0.0
     items: list[dict] = field(default_factory=list)
     intersection_details: list[dict] = field(default_factory=list)
+    # Per-cell data for crossline map: arrays of (easting, northing, diff, mean_depth)
+    cell_eastings: np.ndarray = field(default_factory=lambda: np.empty(0))
+    cell_northings: np.ndarray = field(default_factory=lambda: np.empty(0))
+    cell_diffs: np.ndarray = field(default_factory=lambda: np.empty(0))
+    cell_mean_depths: np.ndarray = field(default_factory=lambda: np.empty(0))
+    # Per-line track data for map background (list of (E, N) arrays)
+    line_tracks: list[np.ndarray] = field(default_factory=list)
 
     @property
     def overall_verdict(self) -> str:
@@ -68,8 +75,16 @@ def run_crossline_qc(
     # Find cells where multiple lines overlap
     depth_diffs = []
     mean_depths = []
+    cell_es = []
+    cell_ns = []
 
     all_points = {idx: pts for idx, pts in line_grids.items()}
+
+    # Store per-line track centroids for map background
+    for idx, pts in all_points.items():
+        # Downsample to max 500 points per line for map rendering
+        step = max(1, len(pts) // 500)
+        result.line_tracks.append(pts[::step, :2].copy())
 
     # Grid all points
     all_e = np.concatenate([p[:, 0] for p in all_points.values()])
@@ -83,11 +98,14 @@ def run_crossline_qc(
             if idx2 <= idx1:
                 continue
 
-            # Grid both lines
-            diffs = _grid_compare(pts1, pts2, cell_size, e_min, e_max, n_min, n_max)
+            # Grid both lines -- request cell centers for map
+            diffs = _grid_compare(pts1, pts2, cell_size, e_min, e_max, n_min, n_max,
+                                  return_centers=True)
             if diffs is not None and len(diffs) > 0:
                 depth_diffs.extend(diffs[:, 0].tolist())
                 mean_depths.extend(diffs[:, 1].tolist())
+                cell_es.extend(diffs[:, 2].tolist())
+                cell_ns.extend(diffs[:, 3].tolist())
 
                 result.intersection_details.append({
                     "line1": idx1, "line2": idx2,
@@ -102,6 +120,12 @@ def run_crossline_qc(
 
     dd = np.array(depth_diffs)
     md = np.array(mean_depths)
+
+    # Store per-cell geographic data for crossline map
+    result.cell_eastings = np.array(cell_es)
+    result.cell_northings = np.array(cell_ns)
+    result.cell_diffs = dd.copy()
+    result.cell_mean_depths = md.copy()
 
     result.num_intersections = len(dd)
     result.depth_diff_mean = float(np.mean(dd))
@@ -164,8 +188,14 @@ def _extract_beam_positions(gsf: GsfFile) -> np.ndarray:
 
 
 def _grid_compare(pts1: np.ndarray, pts2: np.ndarray, cell_size: float,
-                  e_min: float, e_max: float, n_min: float, n_max: float) -> np.ndarray | None:
-    """Compare two point sets on a common grid, return depth differences."""
+                  e_min: float, e_max: float, n_min: float, n_max: float,
+                  return_centers: bool = False) -> np.ndarray | None:
+    """Compare two point sets on a common grid, return depth differences.
+
+    When *return_centers* is True the returned array has shape (N, 4):
+        [diff, mean_depth, cell_center_E, cell_center_N]
+    otherwise (N, 2): [diff, mean_depth]  (legacy behaviour).
+    """
     from scipy.stats import binned_statistic_2d
 
     nx = max(1, int((e_max - e_min) / cell_size) + 1)
@@ -183,7 +213,16 @@ def _grid_compare(pts1: np.ndarray, pts2: np.ndarray, cell_size: float,
 
     diffs = g1[valid] - g2[valid]
     means = (g1[valid] + g2[valid]) / 2.0
-    return np.column_stack([diffs, means])
+
+    if not return_centers:
+        return np.column_stack([diffs, means])
+
+    # Build cell-center coordinate grids
+    center_e = 0.5 * (bins_e[:-1] + bins_e[1:])
+    center_n = 0.5 * (bins_n[:-1] + bins_n[1:])
+    ce_grid, cn_grid = np.meshgrid(center_e, center_n, indexing="ij")
+
+    return np.column_stack([diffs, means, ce_grid[valid], cn_grid[valid]])
 
 
 def _check_striping(gsf_files: list[GsfFile], result: CrosslineResult) -> None:

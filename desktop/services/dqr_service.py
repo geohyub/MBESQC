@@ -92,8 +92,8 @@ class DqrWorker(QObject):
 
         if cfg.skip_caris:
             # ── Skip CARIS: use existing surfaces ──
-            self.progress.emit(1, self.TOTAL_PHASES, "CARIS 스킵 — 기존 서페이스 사용")
-            self.log_msg.emit("⏭ CARIS 파이프라인 스킵 (기존 이미지/GeoTIFF 사용)")
+            self.progress.emit(1, self.TOTAL_PHASES, "CARIS skip - using existing surfaces")
+            self.log_msg.emit("[SKIP] CARIS pipeline skipped (using existing images/GeoTIFF)")
         else:
             # ── Phase 1: Precheck ──
             self.progress.emit(1, self.TOTAL_PHASES, "사전검증 중...")
@@ -101,16 +101,16 @@ class DqrWorker(QObject):
             runner = CarisBatchRunner(caris_config)
             ok, errors = runner.precheck()
             if not ok:
-                self.error.emit("사전검증 실패:\n" + "\n".join(f"  • {e}" for e in errors))
+                self.error.emit("사전검증 실패:\n" + "\n".join(f"  - {e}" for e in errors))
                 return
-            self.log_msg.emit("✓ 사전검증 통과")
+            self.log_msg.emit("[V] 사전검증 통과")
 
             # ── Phase 2: CARIS Pipeline ──
             self.progress.emit(2, self.TOTAL_PHASES, "CARIS 파이프라인 실행 중...")
             runner.progress.connect(self.log_msg.emit)
             runner.step_done.connect(
                 lambda name, ok: self.log_msg.emit(
-                    f"  {'✓' if ok else '✗'} {name}"
+                    f"  {'[V]' if ok else '[X]'} {name}"
                 )
             )
 
@@ -128,7 +128,7 @@ class DqrWorker(QObject):
                 self.error.emit(f"CARIS 파이프라인 실패: {pipeline_error[0]}")
                 return
 
-            self.log_msg.emit("✓ CARIS 파이프라인 완료")
+            self.log_msg.emit("[V] CARIS 파이프라인 완료")
 
             if cfg.caris_only:
                 out_dir = Path(cfg.output_dir) if cfg.output_dir else (Path(cfg.hips_file).parent / "dqr_output" if cfg.hips_file else Path.cwd() / "dqr_output")
@@ -165,7 +165,7 @@ class DqrWorker(QObject):
             grid_resolution=cfg.grid_resolution,
         )
 
-        self.log_msg.emit(f"✓ DQR 저장: {output_pptx}")
+        self.log_msg.emit(f"[V] DQR 저장: {output_pptx}")
         self.finished.emit(output_pptx)
 
     # ── Internal helpers ──

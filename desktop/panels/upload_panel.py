@@ -16,7 +16,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QObject, QThread, Slot
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Font, Space, Radius, rgba
+from geoview_pyside6.theme_aware import c
 
 from desktop.services.data_service import DataService
 from geoview_pyside6.widgets import FileDropZone
@@ -89,7 +90,7 @@ class UploadPanel(QWidget):
         self._project_label.setStyleSheet(f"""
             font-size: {Font.LG}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         layout.addWidget(self._project_label)
@@ -109,16 +110,16 @@ class UploadPanel(QWidget):
         scan_btn.setCursor(Qt.PointingHandCursor)
         scan_btn.setStyleSheet(f"""
             QPushButton {{
-                background: {Dark.NAVY};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER_H};
+                background: {c().NAVY};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER_H};
                 border-radius: {Radius.SM}px;
                 padding: 6px 16px;
                 font-size: {Font.SM}px;
                 font-weight: {Font.MEDIUM};
             }}
             QPushButton:hover {{
-                background: {Dark.SLATE};
+                background: {c().SLATE};
             }}
         """)
         scan_btn.clicked.connect(self._on_scan_directory)
@@ -132,13 +133,13 @@ class UploadPanel(QWidget):
         self._progress.setMaximum(0)  # indeterminate
         self._progress.setStyleSheet(f"""
             QProgressBar {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: 4px;
                 height: 6px;
             }}
             QProgressBar::chunk {{
-                background: {Dark.CYAN};
+                background: {c().CYAN};
                 border-radius: 3px;
             }}
         """)
@@ -158,10 +159,10 @@ class UploadPanel(QWidget):
 
         self._table.setStyleSheet(f"""
             QTableWidget {{
-                background: {Dark.DARK};
-                alternate-background-color: {Dark.BG_ALT};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                alternate-background-color: {c().BG_ALT};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: {Radius.SM}px;
                 font-size: {Font.SM}px;
             }}
@@ -169,17 +170,81 @@ class UploadPanel(QWidget):
                 padding: 4px 8px;
                 border: none;
             }}
+            QTableWidget::item:hover {{
+                background: {c().SLATE};
+            }}
             QHeaderView::section {{
-                background: {Dark.NAVY};
-                color: {Dark.MUTED};
+                background: {c().NAVY};
+                color: {c().MUTED};
                 font-size: {Font.XS}px;
                 font-weight: {Font.MEDIUM};
                 border: none;
-                border-bottom: 1px solid {Dark.BORDER};
+                border-bottom: 1px solid {c().BORDER};
                 padding: 4px 8px;
             }}
         """)
         layout.addWidget(self._table)
+
+        self._apply_styles()
+
+    # ── Theme ──────────────────────────────────────────
+
+    def _apply_styles(self):
+        self._project_label.setStyleSheet(f"""
+            font-size: {Font.LG}px;
+            font-weight: {Font.SEMIBOLD};
+            color: {c().TEXT_BRIGHT};
+            background: transparent;
+        """)
+        self._progress.setStyleSheet(f"""
+            QProgressBar {{
+                background: {c().DARK};
+                border: none;
+                border-radius: 4px;
+                height: 6px;
+            }}
+            QProgressBar::chunk {{
+                background: {c().CYAN};
+                border-radius: 3px;
+            }}
+        """)
+        self._table.setStyleSheet(f"""
+            QTableWidget {{
+                background: {c().DARK};
+                alternate-background-color: {c().BG_ALT};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
+                border-radius: {Radius.SM}px;
+                font-size: {Font.SM}px;
+            }}
+            QTableWidget::item {{
+                padding: 4px 8px;
+                border: none;
+            }}
+            QTableWidget::item:hover {{
+                background: {c().SLATE};
+            }}
+            QHeaderView::section {{
+                background: {c().NAVY};
+                color: {c().MUTED};
+                font-size: {Font.XS}px;
+                font-weight: {Font.MEDIUM};
+                border: none;
+                border-bottom: 1px solid {c().BORDER};
+                padding: 4px 8px;
+            }}
+        """)
+
+    def on_theme_changed(self):
+        """Re-apply theme to all inline-styled widgets."""
+        self._apply_styles()
+        for attr_name in dir(self):
+            obj = getattr(self, attr_name, None)
+            if obj and hasattr(obj, "refresh_theme") and callable(obj.refresh_theme):
+                try:
+                    obj.refresh_theme()
+                except Exception:
+                    pass
 
     def _on_files_dropped(self, paths: list[str]):
         if not self._project_id:

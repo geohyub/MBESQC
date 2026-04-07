@@ -1,11 +1,15 @@
 """MBESQC Chart Renderer -- 7 high-quality matplotlib charts (dark theme, 200 DPI).
 
 All render_* functions return PNG bytes.
+Surface/text colors are resolved lazily via _t() so they respond to theme changes.
+Accent colors are fixed by design.
 """
 
 from __future__ import annotations
 
 import io
+import sys
+import os
 from typing import Optional
 
 import numpy as np
@@ -16,25 +20,38 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.colors import LinearSegmentedColormap
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "_shared"))
+from geoview_pyside6.theme_aware import c
 
-# ── Dark theme ──
 
-_STYLE = {
-    "figure.facecolor": "#0A0E17",
-    "axes.facecolor": "#111827",
-    "axes.edgecolor": "#1F2937",
-    "axes.labelcolor": "#9CA3AF",
-    "text.color": "#D1D5DB",
-    "xtick.color": "#6B7280",
-    "ytick.color": "#6B7280",
-    "grid.color": "#1F2937",
-    "grid.alpha": 0.6,
-    "font.family": "Pretendard",
-    "font.size": 10,
-    "savefig.dpi": 200,
-    "savefig.facecolor": "#0A0E17",
-}
+# ── Theme-aware helpers ──
 
+def _t():
+    """Current theme surface/text colors (lazy)."""
+    return c()
+
+
+def _style():
+    """Build matplotlib rc dict from current theme."""
+    t = _t()
+    return {
+        "figure.facecolor": t.BG,
+        "axes.facecolor": t.BG_ALT,
+        "axes.edgecolor": t.SLATE,
+        "axes.labelcolor": t.MUTED,
+        "text.color": t.TEXT,
+        "xtick.color": t.DIM,
+        "ytick.color": t.DIM,
+        "grid.color": t.SLATE,
+        "grid.alpha": 0.6,
+        "font.family": "Pretendard",
+        "font.size": 10,
+        "savefig.dpi": 200,
+        "savefig.facecolor": t.BG,
+    }
+
+
+# Accent colors (fixed, not theme-dependent)
 _CYAN = "#06B6D4"
 _GREEN = "#10B981"
 _BLUE = "#3B82F6"
@@ -84,7 +101,7 @@ def render_nav_track(lats: np.ndarray, lons: np.ndarray,
                      depths: Optional[np.ndarray] = None,
                      title: str = "Navigation Track") -> bytes:
     """Survey track map colored by depth."""
-    with plt.rc_context(_STYLE):
+    with plt.rc_context(_style()):
         fig, ax = plt.subplots(figsize=(10, 8))
 
         lats = _downsample(np.asarray(lats))
@@ -102,16 +119,16 @@ def render_nav_track(lats: np.ndarray, lons: np.ndarray,
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
-        ax.set_title(title, fontsize=12, fontweight=600, color="#F9FAFB")
+        ax.set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT)
         ax.set_aspect("equal")
         ax.grid(True, alpha=0.3)
 
         # Annotation box
         stats_text = f"Points: {len(lats):,}\nLat: {lats.min():.6f} ~ {lats.max():.6f}\nLon: {lons.min():.6f} ~ {lons.max():.6f}"
         ax.text(0.02, 0.98, stats_text, transform=ax.transAxes,
-                fontsize=8, va="top", color="#9CA3AF",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor="#1A2236",
-                         edgecolor="#1F2937", alpha=0.9))
+                fontsize=8, va="top", color=_t().MUTED,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor=_t().NAVY,
+                         edgecolor=_t().SLATE, alpha=0.9))
 
         return _fig_to_png(fig)
 
@@ -124,7 +141,7 @@ def render_beam_profile(across: np.ndarray, depths: np.ndarray,
                         ping_num: int = 0,
                         title: str = "Beam Profile") -> bytes:
     """Single ping beam depth profile."""
-    with plt.rc_context(_STYLE):
+    with plt.rc_context(_style()):
         fig, ax = plt.subplots(figsize=(10, 5))
 
         ax.scatter(across, depths, c=_CYAN, s=2, alpha=0.6, edgecolors="none")
@@ -138,15 +155,15 @@ def render_beam_profile(across: np.ndarray, depths: np.ndarray,
         ax.set_xlabel("Across-Track (m)")
         ax.set_ylabel("Depth (m)")
         ax.set_title(f"{title} (Ping #{ping_num})", fontsize=12,
-                     fontweight=600, color="#F9FAFB")
+                     fontweight=600, color=_t().TEXT_BRIGHT)
         ax.invert_yaxis()
         ax.grid(True, alpha=0.3)
 
         stats = f"Beams: {len(across)}\nDepth: {depths.min():.1f} ~ {depths.max():.1f} m"
         ax.text(0.02, 0.02, stats, transform=ax.transAxes,
-                fontsize=8, va="bottom", color="#9CA3AF",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor="#1A2236",
-                         edgecolor="#1F2937", alpha=0.9))
+                fontsize=8, va="bottom", color=_t().MUTED,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor=_t().NAVY,
+                         edgecolor=_t().SLATE, alpha=0.9))
 
         return _fig_to_png(fig)
 
@@ -162,7 +179,7 @@ def render_motion_timeseries(
     title: str = "Motion Time Series"
 ) -> bytes:
     """4-panel attitude time series."""
-    with plt.rc_context(_STYLE):
+    with plt.rc_context(_style()):
         fig, axes = plt.subplots(4, 1, figsize=(12, 10), sharex=True)
 
         data = [
@@ -190,9 +207,9 @@ def render_motion_timeseries(
             # Stats annotation
             stats = f"\u03bc={np.nanmean(arr):.3f}  \u03c3={np.nanstd(arr):.3f}  range={np.nanmin(arr):.3f}~{np.nanmax(arr):.3f}"
             ax.text(0.99, 0.95, stats, transform=ax.transAxes,
-                    fontsize=7, ha="right", va="top", color="#6B7280")
+                    fontsize=7, ha="right", va="top", color=_t().DIM)
 
-        axes[0].set_title(title, fontsize=12, fontweight=600, color="#F9FAFB")
+        axes[0].set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT)
         axes[-1].set_xlabel("Time (s)")
 
         fig.tight_layout()
@@ -206,7 +223,7 @@ def render_motion_timeseries(
 def render_coverage_map(lines: list[dict],
                         title: str = "Coverage Map") -> bytes:
     """Multi-line survey coverage display."""
-    with plt.rc_context(_STYLE):
+    with plt.rc_context(_style()):
         fig, ax = plt.subplots(figsize=(10, 8))
 
         colors = [_CYAN, _GREEN, _BLUE, _ORANGE, _PURPLE, _RED,
@@ -224,14 +241,14 @@ def render_coverage_map(lines: list[dict],
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
-        ax.set_title(title, fontsize=12, fontweight=600, color="#F9FAFB")
+        ax.set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT)
         ax.set_aspect("equal")
         ax.grid(True, alpha=0.3)
 
         if lines:
             ax.legend(loc="upper right", fontsize=8,
-                     facecolor="#1A2236", edgecolor="#1F2937",
-                     labelcolor="#D1D5DB")
+                     facecolor=_t().NAVY, edgecolor=_t().SLATE,
+                     labelcolor=_t().TEXT)
 
         return _fig_to_png(fig)
 
@@ -247,7 +264,7 @@ def render_crossline_scatter(
     title: str = "Cross-line Depth Comparison"
 ) -> bytes:
     """Scatter plot of intersection depth differences."""
-    with plt.rc_context(_STYLE):
+    with plt.rc_context(_style()):
         fig, ax = plt.subplots(figsize=(10, 6))
 
         ax.scatter(depths, np.abs(diffs), c=_CYAN, s=4, alpha=0.5,
@@ -261,10 +278,10 @@ def render_crossline_scatter(
 
         ax.set_xlabel("Depth (m)")
         ax.set_ylabel("|Depth Difference| (m)")
-        ax.set_title(title, fontsize=12, fontweight=600, color="#F9FAFB")
+        ax.set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT)
         ax.grid(True, alpha=0.3)
-        ax.legend(fontsize=9, facecolor="#1A2236", edgecolor="#1F2937",
-                 labelcolor="#D1D5DB")
+        ax.legend(fontsize=9, facecolor=_t().NAVY, edgecolor=_t().SLATE,
+                 labelcolor=_t().TEXT)
 
         # Pass rate annotation
         if iho_limits is not None:
@@ -275,8 +292,8 @@ def render_crossline_scatter(
             ax.text(0.98, 0.02, f"Pass: {pct:.1f}% ({pass_count}/{total})",
                     transform=ax.transAxes, fontsize=10, ha="right", va="bottom",
                     color=color, fontweight=600,
-                    bbox=dict(boxstyle="round,pad=0.4", facecolor="#1A2236",
-                             edgecolor="#1F2937", alpha=0.9))
+                    bbox=dict(boxstyle="round,pad=0.4", facecolor=_t().NAVY,
+                             edgecolor=_t().SLATE, alpha=0.9))
 
         return _fig_to_png(fig)
 
@@ -288,7 +305,7 @@ def render_crossline_scatter(
 def render_attitude_spectrum(heave: np.ndarray, sample_rate: float = 50.0,
                             title: str = "Heave Spectrum") -> bytes:
     """FFT power spectrum of heave signal."""
-    with plt.rc_context(_STYLE):
+    with plt.rc_context(_style()):
         fig, ax = plt.subplots(figsize=(10, 5))
 
         heave = np.asarray(heave)
@@ -296,7 +313,7 @@ def render_attitude_spectrum(heave: np.ndarray, sample_rate: float = 50.0,
         if n < 32:
             ax.text(0.5, 0.5, "Insufficient data for spectrum",
                     transform=ax.transAxes, ha="center", va="center",
-                    fontsize=12, color="#6B7280")
+                    fontsize=12, color=_t().DIM)
             return _fig_to_png(fig)
 
         # Detrend
@@ -321,16 +338,16 @@ def render_attitude_spectrum(heave: np.ndarray, sample_rate: float = 50.0,
 
         ax.set_xlabel("Frequency (Hz)")
         ax.set_ylabel("Power")
-        ax.set_title(title, fontsize=12, fontweight=600, color="#F9FAFB")
+        ax.set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT)
         ax.grid(True, alpha=0.3)
 
         sig_amp = 4 * np.std(heave)
         ax.text(0.98, 0.98,
                 f"Significant Amplitude: {sig_amp:.3f} m",
                 transform=ax.transAxes, fontsize=9, ha="right", va="top",
-                color="#9CA3AF",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor="#1A2236",
-                         edgecolor="#1F2937", alpha=0.9))
+                color=_t().MUTED,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor=_t().NAVY,
+                         edgecolor=_t().SLATE, alpha=0.9))
 
         return _fig_to_png(fig)
 
@@ -342,7 +359,7 @@ def render_attitude_spectrum(heave: np.ndarray, sample_rate: float = 50.0,
 def render_qc_radar(scores: dict[str, float],
                     title: str = "QC Score Breakdown") -> bytes:
     """Radar/spider chart of 8 QC component scores."""
-    with plt.rc_context(_STYLE):
+    with plt.rc_context(_style()):
         fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
 
         labels = list(scores.keys())
@@ -350,7 +367,7 @@ def render_qc_radar(scores: dict[str, float],
         n = len(labels)
 
         if n == 0:
-            ax.text(0, 0, "No data", ha="center", fontsize=14, color="#6B7280")
+            ax.text(0, 0, "No data", ha="center", fontsize=14, color=_t().DIM)
             return _fig_to_png(fig)
 
         # Close the polygon
@@ -369,15 +386,15 @@ def render_qc_radar(scores: dict[str, float],
 
         # Labels
         ax.set_xticks(angles)
-        ax.set_xticklabels(labels, fontsize=9, color="#D1D5DB")
+        ax.set_xticklabels(labels, fontsize=9, color=_t().TEXT)
         ax.set_ylim(0, 100)
         ax.set_yticks([25, 50, 75, 100])
-        ax.set_yticklabels(["25", "50", "75", "100"], fontsize=7, color="#6B7280")
+        ax.set_yticklabels(["25", "50", "75", "100"], fontsize=7, color=_t().DIM)
 
-        ax.set_title(title, fontsize=12, fontweight=600, color="#F9FAFB", pad=20)
+        ax.set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT, pad=20)
 
         # Grid styling
-        ax.spines["polar"].set_color("#1F2937")
-        ax.grid(color="#1F2937", alpha=0.6)
+        ax.spines["polar"].set_color(_t().SLATE)
+        ax.grid(color=_t().SLATE, alpha=0.6)
 
         return _fig_to_png(fig)

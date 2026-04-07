@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "_shared"))
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Font, Space, Radius
+from geoview_pyside6.theme_aware import c
 
 
 SUPPORTED_EXTENSIONS = {
@@ -48,7 +49,7 @@ class DropZone(QFrame):
         self._icon.setAlignment(Qt.AlignCenter)
         self._icon.setStyleSheet(f"""
             font-size: 36px;
-            color: {Dark.DIM};
+            color: {c().MUTED};
             background: transparent;
             border: none;
         """)
@@ -57,7 +58,7 @@ class DropZone(QFrame):
         instr = QLabel("PDS/GSF/HVF 파일을 여기에 드래그하거나")
         instr.setAlignment(Qt.AlignCenter)
         instr.setStyleSheet(f"""
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             font-size: {Font.SM}px;
             background: transparent;
             border: none;
@@ -69,16 +70,16 @@ class DropZone(QFrame):
         browse_btn.setFixedSize(120, 36)
         browse_btn.setStyleSheet(f"""
             QPushButton {{
-                background: {Dark.NAVY};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER_H};
+                background: {c().NAVY};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER_H};
                 border-radius: {Radius.SM}px;
                 font-size: {Font.SM}px;
                 font-weight: {Font.MEDIUM};
             }}
             QPushButton:hover {{
-                background: {Dark.SLATE};
-                border-color: {Dark.CYAN};
+                background: {c().SLATE};
+                border-color: {c().CYAN};
             }}
         """)
         browse_btn.clicked.connect(self._browse_files)
@@ -88,7 +89,7 @@ class DropZone(QFrame):
         ext_label = QLabel(exts)
         ext_label.setAlignment(Qt.AlignCenter)
         ext_label.setStyleSheet(f"""
-            color: {Dark.DIM};
+            color: {c().MUTED};
             font-size: {Font.XS - 1}px;
             background: transparent;
             border: none;
@@ -103,9 +104,9 @@ class DropZone(QFrame):
                         cx:0.5, cy:0.5, radius:0.8,
                         fx:0.5, fy:0.5,
                         stop:0 rgba(6,182,212,0.08),
-                        stop:1 {Dark.DARK}
+                        stop:1 {c().DARK}
                     );
-                    border: 2px dashed {Dark.CYAN};
+                    border: 2px dashed {c().CYAN};
                     border-radius: {Radius.LG}px;
                 }}
             """)
@@ -114,16 +115,20 @@ class DropZone(QFrame):
                 DropZone {{
                     background: qlineargradient(
                         x1:0, y1:0, x2:1, y2:1,
-                        stop:0 {Dark.DARK},
-                        stop:1 {Dark.BG_ALT}
+                        stop:0 {c().DARK},
+                        stop:1 {c().BG_ALT}
                     );
-                    border: 2px dashed {Dark.BORDER_H};
+                    border: 2px dashed {c().BORDER_H};
                     border-radius: {Radius.LG}px;
                 }}
                 DropZone:hover {{
-                    border-color: {Dark.MUTED};
+                    border-color: {c().MUTED};
                 }}
             """)
+
+    def refresh_theme(self):
+        """Re-apply theme-dependent styles."""
+        self._update_style()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():

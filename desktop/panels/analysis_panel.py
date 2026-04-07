@@ -17,24 +17,96 @@ from PySide6.QtWidgets import (
     QSizePolicy, QStackedWidget, QProgressBar,
     QTableWidget, QTableWidgetItem, QComboBox, QHeaderView,
 )
-from PySide6.QtCore import Qt, Signal, QThread, Slot, QObject
+from PySide6.QtCore import Qt, Signal, QThread, Slot, QObject, QTimer
+from PySide6.QtGui import QPainter, QColor
 
-from geoview_pyside6.constants import Dark, Font, Space, Radius, TABLE_STYLE, STATUS_ICONS, BTN_PRIMARY, BTN_SECONDARY, BTN_DANGER
+from geoview_pyside6.constants import Font, Space, Radius, STATUS_ICONS
+from geoview_pyside6.theme_aware import c
+from geoview_pyside6.widgets import SuccessOverlay
 
 from desktop.services.data_service import DataService
 from desktop.services.analysis_service import AnalysisWorker, compute_score, QC_WEIGHTS
 from desktop.services.insight_service import (
     build_history_story,
     build_module_story,
-    build_run_diff,
     build_result_overview,
-    build_settings_assistant,
     describe_result_snapshot,
     format_number,
     pick_focus_module,
 )
 from desktop.widgets.score_ring import ScoreRing
 from desktop.widgets.mbes_chart import MBESChartWidget
+from desktop.widgets.crossline_map import CrosslineMap
+from geoview_pyside6.widgets.track_plot import TrackPlot, LineRoute
+
+
+def _table_qss() -> str:
+    """c()-based table QSS -- theme-aware replacement for TABLE_STYLE."""
+    return f"""
+        QTableWidget {{
+            background: {c().BG};
+            alternate-background-color: {c().BG_ALT};
+            color: {c().TEXT};
+            border: 1px solid {c().BORDER};
+            border-radius: {Radius.BASE}px;
+            font-size: {Font.SM}px;
+            gridline-color: {c().BORDER};
+        }}
+        QTableWidget::item {{
+            padding: 6px 12px;
+        }}
+        QTableWidget::item:selected {{
+            background: {c().SLATE};
+        }}
+        QTableWidget::item:hover {{
+            background: {c().DARK};
+        }}
+        QHeaderView::section {{
+            background: {c().NAVY};
+            color: {c().MUTED};
+            font-size: {Font.XS}px;
+            font-weight: {Font.SEMIBOLD};
+            border: none;
+            border-bottom: 1px solid {c().BORDER};
+            padding: 8px 12px;
+            letter-spacing: 0.3px;
+        }}
+    """
+
+
+def _btn_primary_qss() -> str:
+    """c()-based primary button QSS."""
+    return f"""
+        QPushButton {{
+            background: {c().CYAN};
+            color: #ffffff;
+            border: none;
+            border-radius: {Radius.BASE}px;
+            font-size: {Font.SM}px;
+            font-weight: {Font.MEDIUM};
+            padding: 7px 18px;
+        }}
+        QPushButton:hover {{ background: {c().CYAN_H}; }}
+        QPushButton:disabled {{
+            background: {c().SLATE};
+            color: {c().DIM};
+        }}
+    """
+
+
+def _btn_danger_qss() -> str:
+    """c()-based danger button QSS."""
+    return f"""
+        QPushButton {{
+            background: {c().RED};
+            color: white;
+            border: none;
+            border-radius: {Radius.BASE}px;
+            font-size: {Font.XS}px;
+            padding: 5px 14px;
+        }}
+        QPushButton:hover {{ background: {c().RED_H}; }}
+    """
 
 
 QC_LABELS = {
@@ -77,115 +149,273 @@ def _grade_for_score(score: float) -> str:
 
 def _color_for_status(status: str) -> str:
     return {
-        "PASS": Dark.GREEN,
-        "WARNING": Dark.ORANGE,
-        "FAIL": Dark.RED,
-        "N/A": Dark.DIM,
-    }.get(status, Dark.DIM)
+        "PASS": c().GREEN,
+        "WARNING": c().ORANGE,
+        "FAIL": c().RED,
+        "N/A": c().MUTED,
+    }.get(status, c().MUTED)
+
+
+def _score_bar_color(score: float) -> str:
+    """Return color based on score threshold."""
+    if score >= 80:
+        return c().GREEN
+    elif score >= 50:
+        return c().ORANGE
+    return c().RED
+
+
+def _tint_bg(base_hex: str, tint_hex: str, alpha: float) -> str:
+    """Blend a tint color onto a base at given alpha."""
+    tint = tint_hex.lstrip("#")
+    tr, tg, tb = int(tint[:2], 16), int(tint[2:4], 16), int(tint[4:6], 16)
+    base = base_hex.lstrip("#")
+    br, bg_, bb = int(base[:2], 16), int(base[2:4], 16), int(base[4:6], 16)
+    r = int(br * (1 - alpha) + tr * alpha)
+    g = int(bg_ * (1 - alpha) + tg * alpha)
+    b = int(bb * (1 - alpha) + tb * alpha)
+    return f"rgb({r}, {g}, {b})"
+
+
+class _AnalysisScoreBar(QWidget):
+    """Thin horizontal score bar (4px) with fill proportional to score."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._score = 0.0
+        self._fill_color = c().BORDER
+        self.setFixedHeight(4)
+
+    def set_score(self, score: float, fill_color: str):
+        self._score = max(0.0, min(100.0, score))
+        self._fill_color = fill_color
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        w = self.width()
+        h = self.height()
+        r = h / 2
+        bg_color = QColor(c().BORDER)
+        painter.setBrush(bg_color)
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(0, 0, w, h, r, r)
+        if self._score > 0:
+            fill_w = max(int(w * self._score / 100.0), h)
+            painter.setBrush(QColor(self._fill_color))
+            painter.drawRoundedRect(0, 0, fill_w, h, r, r)
+        painter.end()
+
+    def refresh_theme(self):
+        self.update()
 
 
 class _AnalysisCard(QFrame):
-    """Individual QC component result card."""
+    """Individual QC component result card with score bar and key metric."""
 
     clicked = Signal(str)  # qc_id
 
     def __init__(self, qc_id: str, parent=None):
         super().__init__(parent)
         self._qc_id = qc_id
+        self._current_status = "---"
+        self._current_score = 0.0
+        self._key_metric = ""
         self.setCursor(Qt.PointingHandCursor)
         self.setFixedHeight(100)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        self.setStyleSheet(f"""
-            QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
-                border-radius: {Radius.SM}px;
-            }}
-            QFrame:hover {{
-                background: {Dark.NAVY};
-                border-color: {Dark.CYAN};
-            }}
-        """)
+        self.setObjectName(f"acard_{qc_id}")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(Space.MD, Space.SM, Space.MD, Space.SM)
-        layout.setSpacing(2)
+        layout.setSpacing(3)
 
-        # Header row: name + weight
+        # Row 1: Name (bold) + weight (muted, right)
         hdr = QHBoxLayout()
-        name = QLabel(QC_LABELS.get(qc_id, qc_id))
-        name.setStyleSheet(f"""
-            font-size: {Font.SM}px;
-            font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT};
-            background: transparent;
-        """)
-        hdr.addWidget(name)
+        hdr.setSpacing(4)
+        self._name_label = QLabel(QC_LABELS.get(qc_id, qc_id))
+        hdr.addWidget(self._name_label)
         hdr.addStretch()
 
-        weight = QLabel(f"{QC_WEIGHTS.get(qc_id, 0)}pt")
-        weight.setStyleSheet(f"""
-            font-size: {Font.XS}px;
-            color: {Dark.DIM};
-            background: transparent;
-        """)
-        hdr.addWidget(weight)
+        self._weight_label = QLabel(f"{QC_WEIGHTS.get(qc_id, 0)}pt")
+        hdr.addWidget(self._weight_label)
         layout.addLayout(hdr)
 
-        # Hint
-        hint = QLabel(QC_HINTS.get(qc_id, ""))
-        hint.setStyleSheet(f"""
-            font-size: {Font.XS}px;
-            color: {Dark.MUTED};
-            background: transparent;
-        """)
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        # Status row
-        status_row = QHBoxLayout()
-        self._status_label = QLabel("---")
-        self._status_label.setStyleSheet(f"""
-            font-size: {Font.SM}px;
-            font-weight: {Font.SEMIBOLD};
-            color: {Dark.DIM};
-            background: transparent;
-        """)
-        status_row.addWidget(self._status_label)
-        status_row.addStretch()
+        # Row 2: Score bar + score number
+        bar_row = QHBoxLayout()
+        bar_row.setSpacing(6)
+        self._score_bar = _AnalysisScoreBar()
+        bar_row.addWidget(self._score_bar, 1)
 
         self._score_label = QLabel("")
-        self._score_label.setStyleSheet(f"""
-            font-size: {Font.SM}px;
-            font-weight: {Font.MEDIUM};
-            color: {Dark.DIM};
-            background: transparent;
-        """)
-        status_row.addWidget(self._score_label)
-        layout.addLayout(status_row)
+        self._score_label.setFixedWidth(34)
+        self._score_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        bar_row.addWidget(self._score_label)
+        layout.addLayout(bar_row)
 
-    def set_result(self, status: str, score: float = 0.0):
-        color = _color_for_status(status)
-        icon = STATUS_ICONS.get(status, "")
-        self._status_label.setText(f"{icon} {status}" if icon else status)
-        self._status_label.setStyleSheet(f"""
+        # Row 3: Key metric
+        self._metric_label = QLabel("")
+        self._metric_label.setWordWrap(True)
+        layout.addWidget(self._metric_label)
+
+        # Row 4: Status badge
+        self._status_label = QLabel("---")
+        layout.addWidget(self._status_label)
+
+        self._apply_card_style()
+
+    def set_result(self, status: str, score: float = 0.0,
+                   key_metric: str = ""):
+        """Update card with QC result data."""
+        self._current_status = status.upper() if status else "---"
+        self._current_score = score
+        self._key_metric = key_metric
+        self._apply_card_style()
+
+    def _apply_card_style(self):
+        status = self._current_status
+        score = self._current_score
+        is_empty = status in ("---", "N/A", "")
+
+        # Card background tint + left accent border based on status
+        bg = c().DARK
+        border_color = c().BORDER
+        left_accent = c().BORDER
+        if not is_empty:
+            if status == "PASS":
+                bg = c().DARK
+                border_color = c().GREEN
+                left_accent = c().GREEN
+            elif status == "WARNING":
+                bg = _tint_bg(c().DARK, c().ORANGE, 0.05)
+                border_color = c().ORANGE
+                left_accent = c().ORANGE
+            elif status == "FAIL":
+                bg = _tint_bg(c().DARK, c().RED, 0.05)
+                border_color = c().RED
+                left_accent = c().RED
+
+        self.setStyleSheet(f"""
+            #{self.objectName()} {{
+                background: {bg};
+                border: 1px solid {border_color};
+                border-left: 3px solid {left_accent};
+                border-radius: {Radius.SM}px;
+            }}
+            #{self.objectName()}:hover {{
+                background: {c().NAVY};
+            }}
+        """)
+
+        # Name
+        self._name_label.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {color};
+            color: {c().TEXT};
             background: transparent;
         """)
-        if score > 0:
-            self._score_label.setText(f"{score:.1f}")
+
+        # Weight
+        self._weight_label.setStyleSheet(f"""
+            font-size: {Font.XS}px;
+            color: {c().MUTED};
+            background: transparent;
+        """)
+
+        # Score bar
+        if score > 0 and not is_empty:
+            bar_color = _score_bar_color(score)
+            self._score_bar.set_score(score, bar_color)
+            self._score_bar.setVisible(True)
+            self._score_label.setText(f"{score:.0f}")
             self._score_label.setStyleSheet(f"""
                 font-size: {Font.SM}px;
-                font-weight: {Font.MEDIUM};
-                color: {color};
+                font-weight: {Font.BOLD};
+                color: {bar_color};
                 background: transparent;
             """)
+            self._score_label.setVisible(True)
+        else:
+            self._score_bar.setVisible(False)
+            self._score_label.setVisible(False)
+
+        # Key metric
+        if self._key_metric and not is_empty:
+            self._metric_label.setText(self._key_metric)
+            self._metric_label.setVisible(True)
+        else:
+            self._metric_label.setVisible(False)
+        self._metric_label.setStyleSheet(f"""
+            font-size: {Font.XS}px;
+            color: {c().TEXT_BRIGHT};
+            background: transparent;
+        """)
+
+        # Status badge
+        badge_map = {
+            "PASS":    ("V PASS",    c().GREEN),
+            "WARNING": ("! WARNING", c().ORANGE),
+            "FAIL":    ("X FAIL",    c().RED),
+            "N/A":     ("- N/A",     c().MUTED),
+        }
+        badge_text, badge_color = badge_map.get(
+            status, ("- ---", c().MUTED))
+        self._status_label.setText(badge_text)
+        self._status_label.setStyleSheet(f"""
+            font-size: {Font.XS}px;
+            font-weight: {Font.SEMIBOLD};
+            color: {badge_color};
+            background: transparent;
+        """)
+
+    def refresh_theme(self):
+        """Re-apply theme."""
+        self._apply_card_style()
+        self._score_bar.refresh_theme()
 
     def mousePressEvent(self, event):
         self.clicked.emit(self._qc_id)
+
+
+def _slim_scrollbar_qss() -> str:
+    """6px slim scrollbar QSS for all QScrollAreas."""
+    return f"""
+        QScrollBar:vertical {{
+            background: transparent;
+            width: 6px;
+            margin: 0;
+        }}
+        QScrollBar::handle:vertical {{
+            background: {c().SLATE};
+            border-radius: 3px;
+            min-height: 20px;
+        }}
+        QScrollBar::handle:vertical:hover {{
+            background: {c().MUTED};
+        }}
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {{
+            height: 0;
+        }}
+        QScrollBar:horizontal {{
+            background: transparent;
+            height: 6px;
+            margin: 0;
+        }}
+        QScrollBar::handle:horizontal {{
+            background: {c().SLATE};
+            border-radius: 3px;
+            min-width: 20px;
+        }}
+        QScrollBar::handle:horizontal:hover {{
+            background: {c().MUTED};
+        }}
+        QScrollBar::add-line:horizontal,
+        QScrollBar::sub-line:horizontal {{
+            width: 0;
+        }}
+    """
 
 
 class AnalysisPanel(QWidget):
@@ -194,6 +424,7 @@ class AnalysisPanel(QWidget):
     panel_title = "QC 분석"
 
     back_to_project = Signal(int)  # project_id
+    toast_requested = Signal(str, str)  # message, level
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -220,17 +451,10 @@ class AnalysisPanel(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        self._main_scroll = scroll
         scroll.setStyleSheet(f"""
             QScrollArea {{ background: transparent; border: none; }}
-            QScrollBar:vertical {{
-                background: {Dark.BG};
-                width: 8px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {Dark.SLATE};
-                border-radius: 4px;
-                min-height: 30px;
-            }}
+            {_slim_scrollbar_qss()}
         """)
 
         content = QWidget()
@@ -246,7 +470,7 @@ class AnalysisPanel(QWidget):
         self._file_label.setStyleSheet(f"""
             font-size: {Font.LG}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         info_col.addWidget(self._file_label)
@@ -254,7 +478,7 @@ class AnalysisPanel(QWidget):
         self._info_label = QLabel("")
         self._info_label.setStyleSheet(f"""
             font-size: {Font.SM}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         info_col.addWidget(self._info_label)
@@ -267,7 +491,7 @@ class AnalysisPanel(QWidget):
         self._run_btn = QPushButton("QC 실행")
         self._run_btn.setCursor(Qt.PointingHandCursor)
         self._run_btn.setFixedSize(100, 36)
-        self._run_btn.setStyleSheet(BTN_PRIMARY)
+        self._run_btn.setStyleSheet(_btn_primary_qss())
         self._run_btn.clicked.connect(self._run_qc)
         header.addWidget(self._run_btn)
 
@@ -281,7 +505,7 @@ class AnalysisPanel(QWidget):
         self._progress_label = QLabel("")
         self._progress_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.CYAN};
+            color: {c().CYAN};
             background: transparent;
         """)
         self._progress_label.setVisible(False)
@@ -294,16 +518,16 @@ class AnalysisPanel(QWidget):
         self._progress_bar.setVisible(False)
         self._progress_bar.setStyleSheet(f"""
             QProgressBar {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: 8px;
                 text-align: center;
-                color: {Dark.TEXT};
+                color: {c().TEXT};
                 font-size: {Font.XS}px;
             }}
             QProgressBar::chunk {{
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {Dark.CYAN}, stop:1 {Dark.GREEN});
+                    stop:0 {c().CYAN}, stop:1 {c().GREEN});
                 border-radius: 7px;
             }}
         """)
@@ -313,7 +537,7 @@ class AnalysisPanel(QWidget):
         self._cancel_btn.setCursor(Qt.PointingHandCursor)
         self._cancel_btn.setFixedSize(60, 24)
         self._cancel_btn.setVisible(False)
-        self._cancel_btn.setStyleSheet(BTN_DANGER)
+        self._cancel_btn.setStyleSheet(_btn_danger_qss())
         self._cancel_btn.clicked.connect(self._cancel_qc)
         progress_row.addWidget(self._cancel_btn)
 
@@ -323,8 +547,8 @@ class AnalysisPanel(QWidget):
         self._overview_frame.setVisible(False)
         self._overview_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -336,7 +560,7 @@ class AnalysisPanel(QWidget):
         overview_title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         overview_layout.addWidget(overview_title)
@@ -346,7 +570,7 @@ class AnalysisPanel(QWidget):
         self._overview_headline.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.MEDIUM};
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         overview_layout.addWidget(self._overview_headline)
@@ -356,19 +580,19 @@ class AnalysisPanel(QWidget):
         self._overview_body.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._overview_body.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         overview_layout.addWidget(self._overview_body)
 
-        layout.addWidget(self._overview_frame)
+        # overview_frame is added to layout below (after cards grid)
 
         self._spotlight_frame = QFrame()
         self._spotlight_frame.setVisible(False)
         self._spotlight_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -380,7 +604,7 @@ class AnalysisPanel(QWidget):
         spotlight_title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         spotlight_layout.addWidget(spotlight_title)
@@ -389,7 +613,7 @@ class AnalysisPanel(QWidget):
         findings_title.setStyleSheet(f"""
             font-size: {Font.XS}px;
             font-weight: {Font.MEDIUM};
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         spotlight_layout.addWidget(findings_title)
@@ -401,7 +625,7 @@ class AnalysisPanel(QWidget):
         self._spotlight_findings.linkActivated.connect(self._on_rich_link_activated)
         self._spotlight_findings.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         spotlight_layout.addWidget(self._spotlight_findings)
@@ -410,7 +634,7 @@ class AnalysisPanel(QWidget):
         actions_title.setStyleSheet(f"""
             font-size: {Font.XS}px;
             font-weight: {Font.MEDIUM};
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         spotlight_layout.addWidget(actions_title)
@@ -422,19 +646,19 @@ class AnalysisPanel(QWidget):
         self._spotlight_actions.linkActivated.connect(self._on_rich_link_activated)
         self._spotlight_actions.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         spotlight_layout.addWidget(self._spotlight_actions)
 
-        layout.addWidget(self._spotlight_frame)
+        # spotlight_frame is added to layout below (after cards grid)
 
         self._history_frame = QFrame()
         self._history_frame.setVisible(False)
         self._history_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -446,7 +670,7 @@ class AnalysisPanel(QWidget):
         history_title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         history_layout.addWidget(history_title)
@@ -456,7 +680,7 @@ class AnalysisPanel(QWidget):
         self._history_headline.setStyleSheet(f"""
             font-size: {Font.XS}px;
             font-weight: {Font.MEDIUM};
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         history_layout.addWidget(self._history_headline)
@@ -468,19 +692,19 @@ class AnalysisPanel(QWidget):
         self._history_body.linkActivated.connect(self._on_rich_link_activated)
         self._history_body.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         history_layout.addWidget(self._history_body)
 
-        layout.addWidget(self._history_frame)
+        # history_frame is added to layout below (after cards grid)
 
         self._diff_frame = QFrame()
         self._diff_frame.setVisible(False)
         self._diff_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -492,7 +716,7 @@ class AnalysisPanel(QWidget):
         diff_title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         diff_layout.addWidget(diff_title)
@@ -502,7 +726,7 @@ class AnalysisPanel(QWidget):
         self._diff_headline.setStyleSheet(f"""
             font-size: {Font.XS}px;
             font-weight: {Font.MEDIUM};
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         diff_layout.addWidget(self._diff_headline)
@@ -511,7 +735,7 @@ class AnalysisPanel(QWidget):
         self._diff_body.setWordWrap(True)
         self._diff_body.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         diff_layout.addWidget(self._diff_body)
@@ -523,19 +747,19 @@ class AnalysisPanel(QWidget):
         self._diff_changes.linkActivated.connect(self._on_rich_link_activated)
         self._diff_changes.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         diff_layout.addWidget(self._diff_changes)
 
-        layout.addWidget(self._diff_frame)
+        # diff_frame is added to layout below (after cards grid)
 
         self._settings_frame = QFrame()
         self._settings_frame.setVisible(False)
         self._settings_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -547,7 +771,7 @@ class AnalysisPanel(QWidget):
         settings_title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         settings_layout.addWidget(settings_title)
@@ -557,7 +781,7 @@ class AnalysisPanel(QWidget):
         self._settings_headline.setStyleSheet(f"""
             font-size: {Font.XS}px;
             font-weight: {Font.MEDIUM};
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         settings_layout.addWidget(self._settings_headline)
@@ -567,21 +791,22 @@ class AnalysisPanel(QWidget):
         self._settings_body.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._settings_body.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         settings_layout.addWidget(self._settings_body)
 
-        layout.addWidget(self._settings_frame)
+        # settings_frame is added to layout below (after cards grid)
 
         # QC cards grid (4 columns x 2 rows)
         cards_label = QLabel("QC 모듈 결과")
         cards_label.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.MEDIUM};
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
+        # ── QC cards grid (MOVED UP -- results first) ──
         layout.addWidget(cards_label)
 
         self._cards_grid = QGridLayout()
@@ -602,8 +827,8 @@ class AnalysisPanel(QWidget):
         self._story_frame.setVisible(False)
         self._story_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -615,7 +840,7 @@ class AnalysisPanel(QWidget):
         self._story_title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT};
+            color: {c().TEXT_BRIGHT};
             background: transparent;
         """)
         story_layout.addWidget(self._story_title)
@@ -625,7 +850,7 @@ class AnalysisPanel(QWidget):
         self._story_body.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._story_body.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             background: transparent;
         """)
         story_layout.addWidget(self._story_body)
@@ -635,20 +860,20 @@ class AnalysisPanel(QWidget):
         self._story_next.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._story_next.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.MUTED};
+            color: {c().MUTED};
             background: transparent;
         """)
         story_layout.addWidget(self._story_next)
 
-        layout.addWidget(self._story_frame)
+        # story_frame is added to layout below (after chart area)
 
         # ── Module Detail Panel (items table) ──
         self._detail_frame = QFrame()
         self._detail_frame.setVisible(False)
         self._detail_frame.setStyleSheet(f"""
             QFrame {{
-                background: {Dark.DARK};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                border: none;
                 border-radius: {Radius.SM}px;
             }}
         """)
@@ -658,7 +883,7 @@ class AnalysisPanel(QWidget):
         self._detail_title = QLabel("")
         self._detail_title.setStyleSheet(f"""
             font-size: {Font.SM}px; font-weight: {Font.SEMIBOLD};
-            color: {Dark.TEXT_BRIGHT}; background: transparent;
+            color: {c().TEXT_BRIGHT}; background: transparent;
         """)
         detail_layout.addWidget(self._detail_title)
 
@@ -672,9 +897,9 @@ class AnalysisPanel(QWidget):
         self._detail_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._detail_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._detail_table.setMaximumHeight(200)
-        self._detail_table.setStyleSheet(TABLE_STYLE)
+        self._detail_table.setStyleSheet(_table_qss())
         detail_layout.addWidget(self._detail_table)
-        layout.addWidget(self._detail_frame)
+        # detail_frame is added to layout below
 
         # ── Per-line Filter + Table (Coverage/Motion) ──
         self._line_filter_frame = QFrame()
@@ -683,16 +908,16 @@ class AnalysisPanel(QWidget):
         lf_layout.setContentsMargins(0, 0, 0, 0)
 
         lf_label = QLabel("라인 선택:")
-        lf_label.setStyleSheet(f"font-size: {Font.XS}px; color: {Dark.MUTED}; background: transparent;")
+        lf_label.setStyleSheet(f"font-size: {Font.XS}px; color: {c().MUTED}; background: transparent;")
         lf_layout.addWidget(lf_label)
 
         self._line_filter = QComboBox()
         self._line_filter.setFixedWidth(250)
         self._line_filter.setStyleSheet(f"""
             QComboBox {{
-                background: {Dark.DARK};
-                color: {Dark.TEXT};
-                border: 1px solid {Dark.BORDER};
+                background: {c().DARK};
+                color: {c().TEXT};
+                border: 1px solid {c().BORDER};
                 border-radius: {Radius.SM}px;
                 padding: 4px 8px;
                 font-size: {Font.XS}px;
@@ -708,22 +933,21 @@ class AnalysisPanel(QWidget):
         self._motion_toggle.setVisible(False)
         self._motion_toggle.setStyleSheet(f"""
             QPushButton {{
-                background: {Dark.SLATE};
-                color: {Dark.TEXT};
+                background: {c().SLATE};
+                color: {c().TEXT};
                 border: none;
                 border-radius: {Radius.SM}px;
                 font-size: {Font.XS}px;
             }}
             QPushButton:checked {{
-                background: {Dark.CYAN};
-                color: {Dark.BG};
+                background: {c().CYAN};
+                color: {c().BG};
             }}
         """)
         self._motion_toggle.toggled.connect(self._on_motion_toggle)
         lf_layout.addWidget(self._motion_toggle)
 
         lf_layout.addStretch()
-        layout.addWidget(self._line_filter_frame)
 
         self._line_table = QTableWidget()
         self._line_table.setVisible(False)
@@ -735,17 +959,116 @@ class AnalysisPanel(QWidget):
         self._line_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._line_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._line_table.setMaximumHeight(200)
-        self._line_table.setStyleSheet(TABLE_STYLE)
-        layout.addWidget(self._line_table)
+        self._line_table.setStyleSheet(_table_qss())
 
         # Interactive chart widget
         self._chart = MBESChartWidget()
-        layout.addWidget(self._chart)
 
+        # Crossline intersection map (visible only when crossline QC selected)
+        self._crossline_map = CrosslineMap()
+        self._crossline_map.setVisible(False)
+
+        # Track Plot (interactive multi-line survey route map)
+        self._track_plot = TrackPlot(show_legend=True, show_toolbar=True, show_hint=True)
+        self._track_plot.setMinimumHeight(280)
+        self._track_plot.setMaximumHeight(420)
+        self._track_plot.setVisible(False)
+        self._track_plot.line_selected.connect(self._on_track_line_clicked)
+
+        # 3D Bathymetry Map
+        from desktop.widgets.bathymetry_3d import Bathymetry3D
+        self._bathy_3d = Bathymetry3D()
+        self._bathy_3d.setMinimumHeight(350)
+        self._bathy_3d.setMaximumHeight(500)
+        self._bathy_3d.setVisible(False)
+
+        # ────────────────────────────────────────────
+        # LAYOUT ORDER (top to bottom):
+        #   1. Header + score ring  (already added above)
+        #   2. Progress bar         (already added above)
+        #   3. QC cards grid        (already added above)
+        #   4. Module detail table
+        #   5. Line filter + per-line table
+        #   6. Chart area
+        #   6b. Crossline intersection map
+        #   6c. Track Plot (survey route map)
+        #   7. Insight frames (overview, spotlight, history, diff, story, settings)
+        # ────────────────────────────────────────────
+        layout.addWidget(self._detail_frame)
+        layout.addWidget(self._line_filter_frame)
+        layout.addWidget(self._line_table)
+        layout.addWidget(self._chart)
+        layout.addWidget(self._crossline_map)
+        layout.addWidget(self._bathy_3d)
+        layout.addWidget(self._track_plot)
+        layout.addWidget(self._overview_frame)
+        layout.addWidget(self._spotlight_frame)
+        layout.addWidget(self._history_frame)
+        layout.addWidget(self._diff_frame)
+        layout.addWidget(self._story_frame)
+        layout.addWidget(self._settings_frame)
         layout.addStretch()
 
         scroll.setWidget(content)
         outer.addWidget(scroll)
+
+        self._apply_styles()
+
+    # ── Theme ──────────────────────────────────────────
+
+    def _apply_styles(self):
+        self._file_label.setStyleSheet(f"""
+            font-size: {Font.LG}px;
+            font-weight: {Font.SEMIBOLD};
+            color: {c().TEXT_BRIGHT};
+            background: transparent;
+        """)
+        self._info_label.setStyleSheet(f"""
+            font-size: {Font.SM}px;
+            color: {c().MUTED};
+            background: transparent;
+        """)
+        self._progress_label.setStyleSheet(f"""
+            font-size: {Font.XS}px;
+            color: {c().CYAN};
+            background: transparent;
+        """)
+        for frame in (self._overview_frame, self._spotlight_frame,
+                      self._history_frame, self._diff_frame,
+                      self._settings_frame, self._story_frame,
+                      self._detail_frame):
+            frame.setStyleSheet(f"""
+                QFrame {{
+                    background: {c().DARK};
+                    border: none;
+                    border-radius: {Radius.SM}px;
+                }}
+            """)
+        # Tables -- ensure theme-aware background, no black/default residue
+        self._detail_table.setStyleSheet(_table_qss())
+        self._line_table.setStyleSheet(_table_qss())
+        # Buttons
+        self._run_btn.setStyleSheet(_btn_primary_qss())
+        self._cancel_btn.setStyleSheet(_btn_danger_qss())
+        # Analysis cards
+        for card in self._cards.values():
+            card.refresh_theme()
+        # Scroll area background
+        self._main_scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            {_slim_scrollbar_qss()}
+        """)
+
+    def on_theme_changed(self):
+        """Re-apply theme to all inline-styled widgets."""
+        self._apply_styles()
+        for attr_name in dir(self):
+            obj = getattr(self, attr_name, None)
+            if obj and hasattr(obj, "refresh_theme") and callable(obj.refresh_theme):
+                try:
+                    obj.refresh_theme()
+                except Exception:
+                    pass
 
     def load_file(self, file_id: int, project_id: int):
         """Load QC results for a file."""
@@ -811,19 +1134,82 @@ class AnalysisPanel(QWidget):
             self._detail_frame.setVisible(False)
             self._line_filter_frame.setVisible(False)
             self._line_table.setVisible(False)
+            self._crossline_map.setVisible(False)
             self._chart.clear()
             self._chart.set_title("아직 QC 결과가 없습니다")
 
     def _update_cards(self):
-        """Update all QC cards with result data."""
-        for qc_id, card in self._cards.items():
+        """Update all QC cards with result data -- sequential 200ms cascade reveal."""
+        items = list(self._cards.items())
+        for i, (qc_id, card) in enumerate(items):
             section = self._result_data.get(qc_id, {})
             if section:
                 status = section.get("overall", section.get("verdict", "N/A"))
                 score = section.get("score", 0)
-                card.set_result(status.upper(), score)
+                key_metric = self._extract_key_metric(qc_id, section)
+                # Stagger: 200ms per card, "--" -> real value with delay
+                QTimer.singleShot(
+                    i * 200,
+                    lambda c=card, s=status.upper(), sc=score, km=key_metric: c.set_result(s, sc, key_metric=km),
+                )
             else:
-                card.set_result("N/A")
+                QTimer.singleShot(
+                    i * 200,
+                    lambda c=card: c.set_result("N/A"),
+                )
+
+    @staticmethod
+    def _extract_key_metric(qc_id: str, section: dict) -> str:
+        """Build a human-readable key metric string from section data."""
+        items = section.get("items", [])
+
+        if qc_id == "preprocess":
+            total = len(items) if items else 0
+            passed = sum(1 for it in (items or []) if str(it.get("status", "")).upper() == "PASS")
+            if total > 0:
+                return f"게이트 {passed}/{total} 통과"
+
+        elif qc_id == "file":
+            total = len(items) if items else 0
+            ok = sum(1 for it in (items or []) if str(it.get("status", "")).upper() == "PASS")
+            if total > 0:
+                return f"무결성 {ok}/{total}"
+
+        elif qc_id == "vessel":
+            mismatch = sum(1 for it in (items or []) if str(it.get("status", "")).upper() != "PASS")
+            return f"오프셋 불일치 {mismatch}건"
+
+        elif qc_id == "offset":
+            roll = section.get("roll_bias_deg", section.get("roll_bias", None))
+            if roll is not None:
+                return f"Roll bias {roll:.2f}\u00B0"
+
+        elif qc_id == "motion":
+            spikes = section.get("spike_count", section.get("total_spikes", None))
+            if spikes is not None:
+                return f"스파이크 {spikes}개"
+
+        elif qc_id == "svp":
+            count = section.get("profile_count", section.get("n_profiles", None))
+            if count is not None:
+                return f"프로파일 {count}개 적용"
+
+        elif qc_id == "coverage":
+            pct = section.get("coverage_pct", section.get("overall_coverage", None))
+            if pct is not None:
+                return f"커버리지 {pct:.1f}%"
+
+        elif qc_id == "crossline":
+            mean_diff = section.get("mean_depth_diff_m", section.get("mean_diff", None))
+            if mean_diff is not None:
+                return f"깊이 차이 평균 {mean_diff:.3f}m"
+
+        elif qc_id == "surface":
+            res = section.get("grid_resolution_m", section.get("resolution", None))
+            if res is not None:
+                return f"그리드 해상도 {res:.1f}m"
+
+        return ""
 
     def _reset_cards(self):
         self._active_qc_id = None
@@ -834,20 +1220,19 @@ class AnalysisPanel(QWidget):
         overview = build_result_overview(self._result_data)
         self._overview_frame.setVisible(True)
         self._overview_headline.setText(overview["headline"])
-        next_text = " / ".join(overview.get("next_steps", [])[:3])
-        body = overview.get("body", "")
-        if next_text:
-            body = f"{body}\n다음 확인: {next_text}"
-        self._overview_body.setText(body)
+        # Compact: 1 line with top-2 next steps
+        next_text = " / ".join(overview.get("next_steps", [])[:2])
+        self._overview_body.setText(next_text)
 
         findings = overview.get("critical_findings", [])
         actions = overview.get("action_items", [])
         if findings or actions:
+            # Compact: max 2 findings, max 2 actions
             self._spotlight_findings.setText(
-                self._format_spotlight_html(findings) if findings else "요약된 핵심 이슈가 없습니다."
+                self._format_spotlight_html(findings[:2]) if findings else ""
             )
             self._spotlight_actions.setText(
-                self._format_action_html(actions) if actions else "추가 권장 조치가 없습니다."
+                self._format_action_html(actions[:2]) if actions else ""
             )
             self._spotlight_frame.setVisible(True)
         else:
@@ -859,76 +1244,45 @@ class AnalysisPanel(QWidget):
             self._history_frame.setVisible(False)
             return
 
-        lines = []
-        if history.get("body"):
-            lines.append(history["body"])
+        # Compact: headline only + 1 key summary line
+        parts = []
         if history.get("persistent_modules"):
-            lines.append("반복 이슈: " + " / ".join(history["persistent_modules"][:4]))
-        if history.get("worsened_modules"):
-            lines.append("직전 대비 악화: " + " / ".join(history["worsened_modules"][:4]))
-        if history.get("improved_modules"):
-            lines.append("직전 대비 개선: " + " / ".join(history["improved_modules"][:4]))
+            parts.append("반복: " + " / ".join(history["persistent_modules"][:2]))
+        elif history.get("worsened_modules"):
+            parts.append("악화: " + " / ".join(history["worsened_modules"][:2]))
+        elif history.get("improved_modules"):
+            parts.append("개선: " + " / ".join(history["improved_modules"][:2]))
 
         self._history_headline.setText(history["headline"])
-        self._history_body.setText(self._format_history_html(history, lines))
+        self._history_body.setText(" | ".join(parts) if parts else "")
         self._history_frame.setVisible(True)
 
     def _update_diff_panel(self):
-        diff = build_run_diff(self._project_results)
-        self._diff_headline.setText(diff.get("headline", ""))
-        self._diff_body.setText(diff.get("body", ""))
-
-        changes = diff.get("changes", [])
-        if changes:
-            change_lines = []
-            for item in changes[:4]:
-                change_lines.append(
-                    f"• {html.escape(item['module'])}: "
-                    f"{html.escape(item['previous_status'])} -> {html.escape(item['latest_status'])} "
-                    f"({html.escape(item['latest_reading'])}) "
-                    f"{self._module_link(item['qc_id'])}"
-                )
-            self._diff_changes.setText("<br/>".join(change_lines))
-            self._diff_frame.setVisible(True)
-        else:
-            self._diff_changes.setText("")
-            self._diff_frame.setVisible(bool(diff.get("headline")))
+        # diff_frame is hidden by default -- too verbose for most views
+        self._diff_frame.setVisible(False)
 
     def _update_settings_panel(self):
-        settings = build_settings_assistant(self._project, self._result_data, self._file_counts)
-        current_state = settings.get("current_state", [])
-        recommendations = settings.get("recommendations", [])
-        if not settings.get("headline") and not current_state and not recommendations:
-            self._settings_frame.setVisible(False)
-            return
-
-        lines = []
-        if current_state:
-            lines.append("현재 설정: " + " / ".join(current_state))
-        if recommendations:
-            lines.extend(f"- {line}" for line in recommendations[:4])
-        self._settings_headline.setText(settings.get("headline", ""))
-        self._settings_body.setText("\n".join(lines))
-        self._settings_frame.setVisible(True)
+        # settings_frame is hidden by default -- too verbose for most views
+        self._settings_frame.setVisible(False)
 
     def _format_spotlight_html(self, findings: list[dict]) -> str:
         lines = []
-        for item in findings[:4]:
+        for item in findings[:2]:
             qc_id = item.get("qc_id") or LABEL_TO_QC_ID.get(item["module"], "")
             lines.append(
-                f"• [{html.escape(item['status'])}] {html.escape(item['module'])} - "
-                f"{html.escape(item['title'])}: {html.escape(item['evidence'])} "
+                f"- [{html.escape(item['status'])}] {html.escape(item['module'])} - "
+                f"{html.escape(item['title'])} "
                 f"{self._module_link(qc_id, focus_name=item.get('focus_name', ''))}"
             )
         return "<br/>".join(lines)
 
     def _format_action_html(self, actions: list[str]) -> str:
         lines = []
-        for line in actions[:4]:
+        for line in actions[:2]:
             module_label, _, detail = line.partition(":")
             qc_id = LABEL_TO_QC_ID.get(module_label.strip(), "")
             text = html.escape(line)
-            lines.append(f"• {text} {self._module_link(qc_id)}")
+            lines.append(f"- {text} {self._module_link(qc_id)}")
         return "<br/>".join(lines)
 
     def _format_history_html(self, history: dict, lines: list[str]) -> str:
@@ -966,7 +1320,7 @@ class AnalysisPanel(QWidget):
             return html.escape(module_label)
         return (
             f"<a href=\"qc:{qc_id}\">"
-            f"<span style=\"color:{Dark.CYAN};\">{html.escape(module_label)}</span>"
+            f"<span style=\"color:{c().CYAN};\">{html.escape(module_label)}</span>"
             f"</a>"
         )
 
@@ -978,7 +1332,7 @@ class AnalysisPanel(QWidget):
             href += f"?item={quote(focus_name)}"
         return (
             f"<a href=\"{href}\">"
-            f"<span style=\"color:{Dark.CYAN};\">{html.escape(label)}</span>"
+            f"<span style=\"color:{c().CYAN};\">{html.escape(label)}</span>"
             f"</a>"
         )
 
@@ -1001,14 +1355,12 @@ class AnalysisPanel(QWidget):
     def _update_story_panel(self, qc_id: str):
         story = build_module_story(qc_id, self._result_data)
         self._story_frame.setVisible(True)
-        self._story_title.setText(f"{story['module']} — {story['status']}")
-        self._story_body.setText(
-            f"{story['headline']}\n"
-            f"왜 중요한가: {story['importance']}\n"
-            f"현재 판정 근거: {story['current_reading']}\n"
-            f"{story['source_text']}"
-        )
-        self._story_next.setText("다음 확인: " + " / ".join(story.get("next_steps", [])[:3]))
+        self._story_title.setText(f"{story['module']} -- {story['status']}")
+        # Compact: headline only (1 line)
+        self._story_body.setText(story.get("headline", ""))
+        # Next steps: max 2 items (1 line)
+        next_items = story.get("next_steps", [])[:2]
+        self._story_next.setText("다음: " + " / ".join(next_items) if next_items else "")
 
     def _on_card_clicked(self, qc_id: str, focus_name: str = ""):
         """Render interactive chart for the selected QC module."""
@@ -1032,6 +1384,34 @@ class AnalysisPanel(QWidget):
             self._populate_line_table(section["lines"])
         if not show_motion_toggle:
             self._motion_toggle.setChecked(False)
+
+        # ── Crossline map visibility ──
+        show_crossline_map = (
+            qc_id == "crossline"
+            and section.get("cell_eastings")
+            and len(section.get("cell_eastings", [])) > 0
+        )
+        self._crossline_map.setVisible(show_crossline_map)
+        if show_crossline_map:
+            self._crossline_map.set_data(section)
+        elif qc_id != "crossline":
+            self._crossline_map.setVisible(False)
+
+        # ── Track plot visibility (show for coverage module) ──
+        show_track = qc_id == "coverage" and section.get("lines")
+        self._track_plot.setVisible(show_track)
+        if show_track:
+            self._populate_track_plot(section)
+
+        # ── 3D Bathymetry map (show for coverage module) ──
+        show_bathy = qc_id == "coverage" and section.get("lines")
+        self._bathy_3d.setVisible(show_bathy)
+        if show_bathy:
+            try:
+                self._bathy_3d.set_data_from_result(self._result_data)
+            except Exception as e:
+                print(f"[AnalysisPanel] 3D bathy error: {e}")
+                self._bathy_3d.setVisible(False)
 
         if not section:
             self._chart.clear()
@@ -1076,12 +1456,12 @@ class AnalysisPanel(QWidget):
         # Also include offset_validation checks
         if qc_id == "offset":
             ov = self._result_data.get("offset_validation", {})
-            for c in ov.get("config_checks", []):
-                items.append({"status": c.get("status", "N/A"),
-                              "name": f"{c.get('sensor', '')} {c.get('field', '')}",
-                              "detail": f"PDS={c.get('pds_value', '')} OM={c.get('om_value', '')}"})
-            for c in ov.get("data_checks", []):
-                items.append(c)
+            for chk in ov.get("config_checks", []):
+                items.append({"status": chk.get("status", "N/A"),
+                              "name": f"{chk.get('sensor', '')} {chk.get('field', '')}",
+                              "detail": f"PDS={chk.get('pds_value', '')} OM={chk.get('om_value', '')}"})
+            for chk in ov.get("data_checks", []):
+                items.append(chk)
         # Crossline intersection details
         if qc_id == "crossline":
             for det in section.get("intersection_details", []):
@@ -1155,6 +1535,51 @@ class AnalysisPanel(QWidget):
             self._line_table.setItem(i, 5, QTableWidgetItem(format_number(ln.get("num_pings", 0), 0)))
         self._line_filter.blockSignals(False)
 
+    def _populate_track_plot(self, section: dict):
+        """Build LineRoute objects from coverage data and feed to TrackPlot."""
+        lines = section.get("lines", [])
+        # Also check overall coverage lats/lons
+        routes: list[LineRoute] = []
+        for i, ln in enumerate(lines):
+            lats = ln.get("lats", [])
+            lons = ln.get("lons", [])
+            if len(lats) < 2 or len(lons) < 2:
+                continue
+            name = ln.get("name", f"Line {i + 1}")
+            routes.append(LineRoute(
+                line_id=name,
+                name=name,
+                lats=lats,
+                lons=lons,
+                score=0.0,
+                grade="--",
+                status="N/A",
+            ))
+        # If no per-line routes, try overall coverage track
+        if not routes:
+            cov = section.get("coverage", section)
+            ovr_lats = cov.get("track_lats", [])
+            ovr_lons = cov.get("track_lons", [])
+            if len(ovr_lats) >= 2 and len(ovr_lons) >= 2:
+                routes.append(LineRoute(
+                    line_id="overall",
+                    name="Overall Track",
+                    lats=ovr_lats,
+                    lons=ovr_lons,
+                    score=0.0,
+                    grade="--",
+                    status="N/A",
+                ))
+        self._track_plot.set_routes(routes)
+
+    def _on_track_line_clicked(self, line_id):
+        """Highlight the selected line in coverage chart."""
+        if isinstance(line_id, str) and line_id != "overall":
+            # Set the line filter combo to the clicked line name
+            idx = self._line_filter.findText(line_id)
+            if idx >= 0:
+                self._line_filter.setCurrentIndex(idx)
+
     def _on_line_filter_changed(self, idx: int):
         """Re-render coverage chart with selected line highlight."""
         section = self._result_data.get("coverage", {})
@@ -1166,6 +1591,9 @@ class AnalysisPanel(QWidget):
             self._chart.render_coverage(section, selected_line=sel)
         except Exception:
             pass
+        # Also highlight in track plot
+        if hasattr(self, '_track_plot') and sel:
+            self._track_plot.select_line(sel)
 
     def _on_motion_toggle(self, checked: bool):
         """Toggle between overall and per-line motion chart."""
@@ -1211,7 +1639,7 @@ class AnalysisPanel(QWidget):
         self._progress_label.setText("QC 파이프라인 실행 중...")
         self._progress_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.CYAN};
+            color: {c().CYAN};
             background: transparent;
         """)
 
@@ -1262,8 +1690,6 @@ class AnalysisPanel(QWidget):
 
     def _on_qc_done(self, result_id: int, data: dict):
         self._run_btn.setEnabled(True)
-        self._progress_label.setVisible(False)
-        self._progress_bar.setVisible(False)
         self._cancel_btn.setVisible(False)
         self._project = DataService.get_project(self._project_id)
         self._result_data = data
@@ -1280,13 +1706,82 @@ class AnalysisPanel(QWidget):
         if focus_qc:
             self._on_card_clicked(focus_qc)
 
+        # Progress bar completion color (GREEN for success)
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {c().DARK};
+                border: none;
+                border-radius: 8px;
+                text-align: center;
+                color: {c().TEXT};
+                font-size: {Font.XS}px;
+            }}
+            QProgressBar::chunk {{
+                background: {c().GREEN};
+                border-radius: 7px;
+            }}
+        """)
+        self._progress_label.setText("QC 완료")
+        self._progress_label.setStyleSheet(f"""
+            font-size: {Font.XS}px;
+            color: {c().GREEN};
+            background: transparent;
+        """)
+        # Reset progress bar after 600ms
+        QTimer.singleShot(600, self._reset_progress_bar)
+
+        # Emit toast + show SuccessOverlay
+        self.toast_requested.emit(f"QC 완료 -- Score {score:.1f} ({grade})", "success")
+        overlay = SuccessOverlay(
+            message=f"QC Complete -- {score:.0f} ({grade})",
+            color=c().GREEN,
+            parent=self,
+        )
+        overlay.show()
+
+    def _reset_progress_bar(self):
+        """Reset progress bar to default styling and hide."""
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {c().DARK};
+                border: none;
+                border-radius: 8px;
+                text-align: center;
+                color: {c().TEXT};
+                font-size: {Font.XS}px;
+            }}
+            QProgressBar::chunk {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 {c().CYAN}, stop:1 {c().GREEN});
+                border-radius: 7px;
+            }}
+        """)
+        self._progress_label.setVisible(False)
+        self._progress_bar.setVisible(False)
+
     def _on_qc_error(self, result_id: int, msg: str):
         self._run_btn.setEnabled(True)
-        self._progress_bar.setVisible(False)
         self._cancel_btn.setVisible(False)
         self._progress_label.setText(f"QC 오류: {msg[:100]}")
         self._progress_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {Dark.RED};
+            color: {c().RED};
             background: transparent;
         """)
+        # Progress bar error color (RED)
+        self._progress_bar.setStyleSheet(f"""
+            QProgressBar {{
+                background: {c().DARK};
+                border: none;
+                border-radius: 8px;
+                text-align: center;
+                color: {c().TEXT};
+                font-size: {Font.XS}px;
+            }}
+            QProgressBar::chunk {{
+                background: {c().RED};
+                border-radius: 7px;
+            }}
+        """)
+        # Reset after 600ms
+        QTimer.singleShot(600, self._reset_progress_bar)

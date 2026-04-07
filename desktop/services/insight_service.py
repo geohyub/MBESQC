@@ -132,7 +132,7 @@ def format_datetime(value: str | None, empty: str = "---") -> str:
 
 def bullet_text(lines: list[str]) -> str:
     clean = [line.strip() for line in lines if line and line.strip()]
-    return "\n".join(f"• {line}" for line in clean)
+    return "\n".join(f"- {line}" for line in clean)
 
 
 def describe_result_snapshot(result: dict | None, anchor_file: dict | None = None) -> str:

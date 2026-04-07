@@ -35,23 +35,31 @@ from PySide6.QtGui import QCursor
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "_shared"))
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Font, Space, Radius
+from geoview_pyside6.theme_aware import c
 
 
 # ══════════════════════════════════════════════
-# Premium Theme
+# Premium Theme -- surface/text via _t(), accents fixed
 # ══════════════════════════════════════════════
-_BG       = "#080C14"
-_SURFACE  = "#0F1729"
-_CARD     = "#141E33"
-_GRID     = "#1A2744"
-_GRID_SUB = "#121C30"
-_BORDER   = "#243352"
-_TEXT     = "#94A3B8"
-_TEXT_DIM = "#64748B"
-_BRIGHT   = "#F1F5F9"
+
+def _t():
+    """Current theme surface/text colors (lazy)."""
+    return c()
+
+
+def _BG():       return _t().BG
+def _SURFACE():  return _t().BG_ALT
+def _CARD():     return _t().NAVY
+def _GRID():     return _t().SLATE
+def _GRID_SUB(): return _t().BORDER
+def _BORDER():   return _t().BORDER_H
+def _TEXT():     return _t().MUTED
+def _TEXT_DIM(): return _t().DIM
+def _BRIGHT():   return _t().TEXT_BRIGHT
 _WHITE    = "#FFFFFF"
 
+# Accent palette -- fixed by design, not theme-dependent
 _CYAN     = "#22D3EE"
 _CYAN_DIM = "#0891B2"
 _EMERALD  = "#34D399"
@@ -66,7 +74,8 @@ _PURPLE   = "#A78BFA"
 _TEAL     = "#2DD4BF"
 _INDIGO   = "#818CF8"
 
-_VERDICT_COLOR = {"PASS": _EMERALD, "WARNING": _AMBER, "FAIL": _ROSE, "N/A": _TEXT_DIM}
+def _VERDICT_COLOR():
+    return {"PASS": _EMERALD, "WARNING": _AMBER, "FAIL": _ROSE, "N/A": _TEXT_DIM()}
 
 _CMAP_DEPTH = LinearSegmentedColormap.from_list(
     "depth", [_CYAN, _EMERALD, _BLUE, _INDIGO])
@@ -76,16 +85,16 @@ _CMAP_HEAT = LinearSegmentedColormap.from_list(
 
 def _dark_ax(ax, title: str = ""):
     """Apply premium dark styling to axes."""
-    ax.set_facecolor(_SURFACE)
-    ax.tick_params(colors=_TEXT_DIM, labelsize=9, direction="in", length=3)
+    ax.set_facecolor(_SURFACE())
+    ax.tick_params(colors=_TEXT_DIM(), labelsize=9, direction="in", length=3)
     for spine in ax.spines.values():
-        spine.set_color(_BORDER)
+        spine.set_color(_BORDER())
         spine.set_linewidth(0.8)
-    ax.grid(True, color=_GRID, alpha=0.4, linewidth=0.5, linestyle="-")
-    ax.grid(True, which="minor", color=_GRID_SUB, alpha=0.2, linewidth=0.3)
+    ax.grid(True, color=_GRID(), alpha=0.4, linewidth=0.5, linestyle="-")
+    ax.grid(True, which="minor", color=_GRID_SUB(), alpha=0.2, linewidth=0.3)
     if title:
-        ax.set_title(title, fontsize=13, fontweight=700, color=_BRIGHT, pad=12,
-                     path_effects=[pe.withStroke(linewidth=3, foreground=_BG)])
+        ax.set_title(title, fontsize=13, fontweight=700, color=_BRIGHT(), pad=12,
+                     path_effects=[pe.withStroke(linewidth=3, foreground=_BG())])
 
 
 def _stat_box(ax, text: str, loc: str = "upper right"):
@@ -97,17 +106,17 @@ def _stat_box(ax, text: str, loc: str = "upper right"):
         "lower left":  (0.02, 0.04, "left", "bottom"),
     }
     x, y, ha, va = coords.get(loc, coords["upper right"])
-    ax.text(x, y, text, transform=ax.transAxes, fontsize=8.5, color=_TEXT,
+    ax.text(x, y, text, transform=ax.transAxes, fontsize=8.5, color=_TEXT(),
             ha=ha, va=va, family="monospace", linespacing=1.7,
-            bbox=dict(boxstyle="round,pad=0.6", facecolor=_CARD,
-                     edgecolor=_BORDER, alpha=0.92, linewidth=0.8))
+            bbox=dict(boxstyle="round,pad=0.6", facecolor=_CARD(),
+                     edgecolor=_BORDER(), alpha=0.92, linewidth=0.8))
 
 
 def _verdict_badge(ax, text: str, color: str, x: float = 0.98, y: float = 0.98):
     """Verdict badge with glow."""
     ax.text(x, y, text, transform=ax.transAxes,
             ha="right", va="top", fontsize=15, fontweight=800, color=color,
-            bbox=dict(boxstyle="round,pad=0.5", facecolor=_CARD,
+            bbox=dict(boxstyle="round,pad=0.5", facecolor=_CARD(),
                      edgecolor=color, alpha=0.95, linewidth=1.5),
             path_effects=[pe.withStroke(linewidth=4, foreground=color + "30")])
 
@@ -201,13 +210,7 @@ class MBESChartWidget(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(f"""
-            MBESChartWidget {{
-                background: {_BG};
-                border: 1px solid {_BORDER};
-                border-radius: {Radius.SM}px;
-            }}
-        """)
+        self._apply_frame_style()
         self.setMinimumHeight(420)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
@@ -220,16 +223,16 @@ class MBESChartWidget(QFrame):
         self._title.setStyleSheet(f"""
             font-size: {Font.SM}px;
             font-weight: {Font.SEMIBOLD};
-            color: {_BRIGHT};
+            color: {_BRIGHT()};
             background: transparent;
             padding: 4px 8px;
         """)
         self._layout.addWidget(self._title)
 
         # Canvas
-        self._fig = Figure(figsize=(11, 5.5), dpi=110, facecolor=_BG)
+        self._fig = Figure(figsize=(11, 5.5), dpi=110, facecolor=_BG())
         self._canvas = _InteractiveCanvas(self._fig, self)
-        self._canvas.setStyleSheet(f"background: {_BG};")
+        self._canvas.setStyleSheet(f"background: {_BG()};")
         self._layout.addWidget(self._canvas, 1)
 
         # Bottom bar: toolbar buttons + coordinate display
@@ -247,15 +250,15 @@ class MBESChartWidget(QFrame):
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent;
-                    color: {_TEXT_DIM};
-                    border: 1px solid {_BORDER};
+                    color: {_TEXT_DIM()};
+                    border: 1px solid {_BORDER()};
                     border-radius: 4px;
                     padding: 0 10px;
                     font-size: {Font.XS}px;
                 }}
                 QPushButton:hover {{
-                    background: {_CARD};
-                    color: {_BRIGHT};
+                    background: {_CARD()};
+                    color: {_BRIGHT()};
                     border-color: {_CYAN};
                 }}
             """)
@@ -267,7 +270,7 @@ class MBESChartWidget(QFrame):
         self._coord_label = QLabel("Scroll: zoom | Right-drag: pan")
         self._coord_label.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {_TEXT_DIM};
+            color: {_TEXT_DIM()};
             background: transparent;
             font-family: monospace;
         """)
@@ -279,6 +282,38 @@ class MBESChartWidget(QFrame):
 
         # Store original limits for home reset
         self._home_limits = {}
+
+    def _apply_frame_style(self):
+        self.setStyleSheet(f"""
+            MBESChartWidget {{
+                background: {_BG()};
+                border: 1px solid {_BORDER()};
+                border-radius: {Radius.SM}px;
+            }}
+        """)
+
+    def refresh_theme(self):
+        """Update all visual theme colors without reloading chart data."""
+        self._apply_frame_style()
+        self._fig.patch.set_facecolor(_BG())
+        self._canvas.setStyleSheet(f"background: {_BG()};")
+        self._title.setStyleSheet(f"""
+            font-size: {Font.SM}px;
+            font-weight: {Font.SEMIBOLD};
+            color: {_BRIGHT()};
+            background: transparent;
+            padding: 4px 8px;
+        """)
+        self._coord_label.setStyleSheet(f"""
+            font-size: {Font.XS}px;
+            color: {_TEXT_DIM()};
+            background: transparent;
+            font-family: monospace;
+        """)
+        # Re-render axes with new theme if data exists
+        for ax in self._fig.axes:
+            ax.set_facecolor(_SURFACE())
+        self._canvas.draw_idle()
 
     def _save_home(self):
         """Save current axes limits as home."""
@@ -301,7 +336,7 @@ class MBESChartWidget(QFrame):
         path, _ = QFileDialog.getSaveFileName(
             self, "차트 저장", "MBESQC_Chart.png", "PNG (*.png)")
         if path:
-            self._fig.savefig(path, dpi=200, facecolor=_BG,
+            self._fig.savefig(path, dpi=200, facecolor=_BG(),
                              bbox_inches="tight", pad_inches=0.3)
 
     def clear(self):
@@ -333,7 +368,7 @@ class MBESChartWidget(QFrame):
         vals = [pitch, roll]
         errs = [pitch_std, roll_std]
         verdicts = [pv, rv]
-        colors = [_VERDICT_COLOR.get(v, _TEXT_DIM) for v in verdicts]
+        colors = [_VERDICT_COLOR().get(v, _TEXT_DIM()) for v in verdicts]
 
         y_pos = np.arange(len(names))
 
@@ -347,7 +382,7 @@ class MBESChartWidget(QFrame):
             ax.barh(y, val, height=0.45, color=color, alpha=0.85,
                     edgecolor=color, linewidth=1.5, zorder=3)
             # Error cap
-            ax.errorbar(val, y, xerr=err, fmt="none", ecolor=_TEXT_DIM,
+            ax.errorbar(val, y, xerr=err, fmt="none", ecolor=_TEXT_DIM(),
                        capsize=6, capthick=1.5, elinewidth=1.5, zorder=4)
             # Glow
             ax.barh(y, val, height=0.55, color=color, alpha=0.08, zorder=2)
@@ -355,8 +390,8 @@ class MBESChartWidget(QFrame):
             offset = err + 0.015 if val >= 0 else -(err + 0.015)
             ax.text(val + offset, y, f"{val:+.4f}\u00b0 \u00b1 {err:.4f}",
                     ha="left" if val >= 0 else "right", va="center",
-                    fontsize=10, color=_BRIGHT, fontweight=600,
-                    path_effects=[pe.withStroke(linewidth=3, foreground=_BG)])
+                    fontsize=10, color=_BRIGHT(), fontweight=600,
+                    path_effects=[pe.withStroke(linewidth=3, foreground=_BG())])
             # Verdict
             ax.text(0.01, y + 0.22, f"[{verdicts[i]}]",
                     fontsize=8, color=colors[i], fontweight=700,
@@ -364,15 +399,15 @@ class MBESChartWidget(QFrame):
 
         # Threshold lines
         for th in [-0.5, -0.1, 0.1, 0.5]:
-            c = _ROSE if abs(th) == 0.5 else _AMBER
-            ax.axvline(th, color=c, linewidth=1, linestyle="--", alpha=0.5, zorder=1)
+            th_color = _ROSE if abs(th) == 0.5 else _AMBER
+            ax.axvline(th, color=th_color, linewidth=1, linestyle="--", alpha=0.5, zorder=1)
             ax.text(th, len(names) - 0.1, f"{th}\u00b0", ha="center", va="bottom",
-                    fontsize=7, color=c, alpha=0.7)
-        ax.axvline(0, color=_TEXT_DIM, linewidth=0.8, alpha=0.4, zorder=1)
+                    fontsize=7, color=th_color, alpha=0.7)
+        ax.axvline(0, color=_TEXT_DIM(), linewidth=0.8, alpha=0.4, zorder=1)
 
         ax.set_yticks(y_pos)
-        ax.set_yticklabels(names, fontsize=11, color=_BRIGHT, fontweight=500)
-        ax.set_xlabel("Bias (degrees)", color=_TEXT, fontsize=10)
+        ax.set_yticklabels(names, fontsize=11, color=_BRIGHT(), fontweight=500)
+        ax.set_xlabel("Bias (degrees)", color=_TEXT(), fontsize=10)
 
         # Auto-range with padding
         max_val = max(abs(roll) + roll_std, abs(pitch) + pitch_std, 0.6) * 1.3
@@ -407,14 +442,14 @@ class MBESChartWidget(QFrame):
                 stds.append(a.get("std", 0))
                 v = a.get("verdict", "N/A")
                 verdicts.append(v)
-                colors.append(_VERDICT_COLOR.get(v, _TEXT_DIM))
+                colors.append(_VERDICT_COLOR().get(v, _TEXT_DIM()))
 
         x = np.arange(len(names))
         w = 0.32
 
         # Mean bars (translucent)
         bars_mean = ax.bar(x - w/2, means, w, label="|Mean|",
-                           color=[c + "50" for c in colors],
+                           color=[clr + "50" for clr in colors],
                            edgecolor=colors, linewidth=1.5, zorder=3)
         # Std bars (solid)
         bars_std = ax.bar(x + w/2, stds, w, label="Std Dev",
@@ -426,20 +461,20 @@ class MBESChartWidget(QFrame):
         for bar, val in zip(bars_std, stds):
             ax.text(bar.get_x() + bar.get_width()/2, val + max(stds)*0.03,
                     f"{val:.4f}", ha="center", va="bottom",
-                    fontsize=8.5, color=_BRIGHT, fontweight=600,
-                    path_effects=[pe.withStroke(linewidth=2, foreground=_BG)])
+                    fontsize=8.5, color=_BRIGHT(), fontweight=600,
+                    path_effects=[pe.withStroke(linewidth=2, foreground=_BG())])
 
         # Verdict badges on bars
-        for i, (bar, v, c) in enumerate(zip(bars_std, verdicts, colors)):
+        for i, (bar, v, clr) in enumerate(zip(bars_std, verdicts, colors)):
             ax.text(bar.get_x() + bar.get_width()/2, -max(stds)*0.08,
                     v, ha="center", va="top", fontsize=8, fontweight=700,
-                    color=c, transform=ax.transData)
+                    color=clr, transform=ax.transData)
 
         ax.set_xticks(x)
-        ax.set_xticklabels(names, fontsize=11, color=_BRIGHT, fontweight=500)
-        ax.set_ylabel("Value", color=_TEXT, fontsize=10)
-        ax.legend(loc="upper left", fontsize=8, facecolor=_CARD,
-                 edgecolor=_BORDER, labelcolor=_TEXT)
+        ax.set_xticklabels(names, fontsize=11, color=_BRIGHT(), fontweight=500)
+        ax.set_ylabel("Value", color=_TEXT(), fontsize=10)
+        ax.legend(loc="upper left", fontsize=8, facecolor=_CARD(),
+                 edgecolor=_BORDER(), labelcolor=_TEXT())
 
         # Stats box
         stat_text = (f"Samples: {data.get('total_samples', 0):,}\n"
@@ -460,13 +495,13 @@ class MBESChartWidget(QFrame):
         """SVP QC -- clean item status display."""
         self._fig.clear()
         ax = self._fig.add_subplot(111)
-        ax.set_facecolor(_SURFACE)
+        ax.set_facecolor(_SURFACE())
         ax.axis("off")
 
         verdict = data.get("verdict", "N/A")
-        v_color = _VERDICT_COLOR.get(verdict, _TEXT_DIM)
+        v_color = _VERDICT_COLOR().get(verdict, _TEXT_DIM())
 
-        ax.set_title(f"SVP QC", fontsize=14, fontweight=700, color=_BRIGHT, pad=15)
+        ax.set_title(f"SVP QC", fontsize=14, fontweight=700, color=_BRIGHT(), pad=15)
         _verdict_badge(ax, verdict, v_color)
 
         # Header
@@ -475,7 +510,7 @@ class MBESChartWidget(QFrame):
                   f"Velocity: {vel[0]:.1f} \u2013 {vel[1]:.1f} m/s        "
                   f"Applied: {'Yes' if data.get('applied') else 'No'}")
         ax.text(0.03, 0.82, header, transform=ax.transAxes,
-                fontsize=11, color=_BRIGHT, fontweight=500)
+                fontsize=11, color=_BRIGHT(), fontweight=500)
 
         # Items
         items = data.get("items", [])
@@ -484,17 +519,17 @@ class MBESChartWidget(QFrame):
             status = it.get("status", "N/A")
             name = it.get("name", "")
             detail = it.get("detail", "")
-            s_color = _VERDICT_COLOR.get(status, _TEXT_DIM)
+            s_color = _VERDICT_COLOR().get(status, _TEXT_DIM())
 
             # Status badge
             ax.text(0.03, y, status, transform=ax.transAxes,
-                    fontsize=10, color=_BG, fontweight=700,
+                    fontsize=10, color=_BG(), fontweight=700,
                     bbox=dict(boxstyle="round,pad=0.3", facecolor=s_color,
                              edgecolor=s_color, alpha=0.9))
             ax.text(0.13, y, name, transform=ax.transAxes,
-                    fontsize=10, color=_BRIGHT, fontweight=500)
+                    fontsize=10, color=_BRIGHT(), fontweight=500)
             ax.text(0.13, y - 0.07, detail, transform=ax.transAxes,
-                    fontsize=9, color=_TEXT)
+                    fontsize=9, color=_TEXT())
             y -= 0.16
 
         self._fig.tight_layout()
@@ -519,19 +554,19 @@ class MBESChartWidget(QFrame):
                 lats = np.asarray(line.get("lats", []))
                 lons = np.asarray(line.get("lons", []))
                 name = line.get("name", f"Line {i+1}")
-                c = palette[i % len(palette)]
+                clr = palette[i % len(palette)]
                 is_selected = (selected_line is None) or (name == selected_line)
                 alpha = 0.9 if is_selected else 0.15
                 lw = 2.5 if (selected_line and is_selected) else 1.8
                 if len(lats) > 0:
-                    ax.plot(lons, lats, color=c, linewidth=lw, alpha=alpha,
+                    ax.plot(lons, lats, color=clr, linewidth=lw, alpha=alpha,
                             label=name[:25], zorder=5 if is_selected else 2)
                     if is_selected:
-                        ax.plot(lons, lats, color=c, linewidth=5, alpha=0.12, zorder=1)
-                        ax.scatter(lons[0], lats[0], c=c, s=30, marker="o",
-                                  edgecolors=_BRIGHT, linewidths=0.8, zorder=6)
-                        ax.scatter(lons[-1], lats[-1], c=c, s=30, marker="s",
-                                  edgecolors=_BRIGHT, linewidths=0.8, zorder=6)
+                        ax.plot(lons, lats, color=clr, linewidth=5, alpha=0.12, zorder=1)
+                        ax.scatter(lons[0], lats[0], c=clr, s=30, marker="o",
+                                  edgecolors=_BRIGHT(), linewidths=0.8, zorder=6)
+                        ax.scatter(lons[-1], lats[-1], c=clr, s=30, marker="s",
+                                  edgecolors=_BRIGHT(), linewidths=0.8, zorder=6)
         else:
             lats = data.get("track_lats")
             lons = data.get("track_lons")
@@ -539,17 +574,17 @@ class MBESChartWidget(QFrame):
                 ax.plot(lons, lats, color=_CYAN, linewidth=1.2, alpha=0.8)
                 ax.plot(lons, lats, color=_CYAN, linewidth=3, alpha=0.1)
 
-        ax.set_xlabel("Longitude (\u00b0)", color=_TEXT, fontsize=10)
-        ax.set_ylabel("Latitude (\u00b0)", color=_TEXT, fontsize=10)
+        ax.set_xlabel("Longitude (\u00b0)", color=_TEXT(), fontsize=10)
+        ax.set_ylabel("Latitude (\u00b0)", color=_TEXT(), fontsize=10)
         ax.set_aspect("equal")
 
         if track_lines and len(track_lines) <= 12:
-            ax.legend(loc="upper right", fontsize=7, facecolor=_CARD,
-                     edgecolor=_BORDER, labelcolor=_TEXT, ncol=2,
+            ax.legend(loc="upper right", fontsize=7, facecolor=_CARD(),
+                     edgecolor=_BORDER(), labelcolor=_TEXT(), ncol=2,
                      framealpha=0.9)
 
         verdict = data.get("verdict", "N/A")
-        v_color = _VERDICT_COLOR.get(verdict, _TEXT_DIM)
+        v_color = _VERDICT_COLOR().get(verdict, _TEXT_DIM())
 
         stat_text = (f"Lines: {data.get('total_lines', 0)}\n"
                      f"Length: {data.get('total_length_km', 0):.1f} km\n"
@@ -571,7 +606,7 @@ class MBESChartWidget(QFrame):
         iho = data.get("iho_order", "1a")
         pct = data.get("iho_pass_pct", 0)
         verdict = data.get("verdict", "N/A")
-        v_color = _VERDICT_COLOR.get(verdict, _TEXT_DIM)
+        v_color = _VERDICT_COLOR().get(verdict, _TEXT_DIM())
 
         _dark_ax(ax, f"Cross-line QC -- IHO S-44 Order {iho}")
 
@@ -595,12 +630,12 @@ class MBESChartWidget(QFrame):
         for bar, val in zip(bars, vals):
             ax.text(val + max(vals) * 0.03, bar.get_y() + bar.get_height()/2,
                     f"{val:.4f} m", ha="left", va="center",
-                    fontsize=10, color=_BRIGHT, fontweight=600,
-                    path_effects=[pe.withStroke(linewidth=2, foreground=_BG)])
+                    fontsize=10, color=_BRIGHT(), fontweight=600,
+                    path_effects=[pe.withStroke(linewidth=2, foreground=_BG())])
 
         ax.set_yticks(y_pos)
-        ax.set_yticklabels(names, fontsize=11, color=_BRIGHT, fontweight=500)
-        ax.set_xlabel("Depth Difference (m)", color=_TEXT, fontsize=10)
+        ax.set_yticklabels(names, fontsize=11, color=_BRIGHT(), fontweight=500)
+        ax.set_xlabel("Depth Difference (m)", color=_TEXT(), fontsize=10)
 
         # IHO pass rate badge
         _verdict_badge(ax, f"IHO Pass: {pct:.1f}%", v_color)
@@ -623,7 +658,7 @@ class MBESChartWidget(QFrame):
         per_line = data.get("per_line", [])
         if not per_line:
             ax.text(0.5, 0.5, "Per-line 데이터 없음", transform=ax.transAxes,
-                    ha="center", va="center", color=_TEXT_DIM, fontsize=12)
+                    ha="center", va="center", color=_TEXT_DIM(), fontsize=12)
             self._canvas.draw()
             return
 
@@ -640,10 +675,10 @@ class MBESChartWidget(QFrame):
         ax.barh(y + h, heave_vals, height=h, color=_AMBER, alpha=0.85, label="Heave σ (m)")
 
         ax.set_yticks(y)
-        ax.set_yticklabels(names, fontsize=7, color=_TEXT)
-        ax.set_xlabel("Standard Deviation", color=_TEXT, fontsize=10)
-        ax.legend(loc="lower right", fontsize=7, facecolor=_CARD,
-                  edgecolor=_BORDER, labelcolor=_TEXT, framealpha=0.9)
+        ax.set_yticklabels(names, fontsize=7, color=_TEXT())
+        ax.set_xlabel("Standard Deviation", color=_TEXT(), fontsize=10)
+        ax.legend(loc="lower right", fontsize=7, facecolor=_CARD(),
+                  edgecolor=_BORDER(), labelcolor=_TEXT(), framealpha=0.9)
 
         ax.invert_yaxis()
         self._fig.tight_layout()
@@ -655,7 +690,7 @@ class MBESChartWidget(QFrame):
         """QC score radar with premium styling."""
         self._fig.clear()
         ax = self._fig.add_subplot(111, polar=True)
-        ax.set_facecolor(_SURFACE)
+        ax.set_facecolor(_SURFACE())
 
         labels = list(scores.keys())
         values = [scores[k] for k in labels]
@@ -678,24 +713,24 @@ class MBESChartWidget(QFrame):
 
         # Score dots with color + value
         for angle, val in zip(angles, values):
-            c = _EMERALD if val >= 80 else _AMBER if val >= 50 else _ROSE
-            ax.scatter([angle], [val], c=c, s=80, zorder=5,
-                      edgecolors=_BRIGHT, linewidths=1.2)
+            dot_clr = _EMERALD if val >= 80 else _AMBER if val >= 50 else _ROSE
+            ax.scatter([angle], [val], c=dot_clr, s=80, zorder=5,
+                      edgecolors=_BRIGHT(), linewidths=1.2)
             ax.text(angle, val + 10, f"{val:.0f}", ha="center", va="bottom",
-                    fontsize=9, color=_BRIGHT, fontweight=700,
-                    path_effects=[pe.withStroke(linewidth=2, foreground=_BG)])
+                    fontsize=9, color=_BRIGHT(), fontweight=700,
+                    path_effects=[pe.withStroke(linewidth=2, foreground=_BG())])
 
         ax.set_xticks(angles)
-        ax.set_xticklabels(labels, fontsize=9.5, color=_BRIGHT, fontweight=500)
+        ax.set_xticklabels(labels, fontsize=9.5, color=_BRIGHT(), fontweight=500)
         ax.set_ylim(0, 110)
         ax.set_yticks([25, 50, 75, 100])
-        ax.set_yticklabels(["25", "50", "75", "100"], fontsize=7, color=_TEXT_DIM)
-        ax.spines["polar"].set_color(_BORDER)
-        ax.grid(color=_GRID, alpha=0.4, linewidth=0.5)
+        ax.set_yticklabels(["25", "50", "75", "100"], fontsize=7, color=_TEXT_DIM())
+        ax.spines["polar"].set_color(_BORDER())
+        ax.grid(color=_GRID(), alpha=0.4, linewidth=0.5)
 
         ax.set_title("QC Score Breakdown", fontsize=14, fontweight=700,
-                     color=_BRIGHT, pad=25,
-                     path_effects=[pe.withStroke(linewidth=3, foreground=_BG)])
+                     color=_BRIGHT(), pad=25,
+                     path_effects=[pe.withStroke(linewidth=3, foreground=_BG())])
 
         self._fig.tight_layout()
         self._save_home()
@@ -706,13 +741,13 @@ class MBESChartWidget(QFrame):
         """File QC items with status badges."""
         self._fig.clear()
         ax = self._fig.add_subplot(111)
-        ax.set_facecolor(_SURFACE)
+        ax.set_facecolor(_SURFACE())
         ax.axis("off")
 
         verdict = data.get("verdict", "N/A")
-        v_color = _VERDICT_COLOR.get(verdict, _TEXT_DIM)
+        v_color = _VERDICT_COLOR().get(verdict, _TEXT_DIM())
 
-        ax.set_title("File QC", fontsize=14, fontweight=700, color=_BRIGHT, pad=15)
+        ax.set_title("File QC", fontsize=14, fontweight=700, color=_BRIGHT(), pad=15)
         _verdict_badge(ax, verdict, v_color)
 
         items = data.get("items", [])
@@ -721,23 +756,23 @@ class MBESChartWidget(QFrame):
             status = it.get("status", "N/A")
             name = it.get("name", "")
             detail = it.get("detail", "")
-            s_color = _VERDICT_COLOR.get(status, _TEXT_DIM)
+            s_color = _VERDICT_COLOR().get(status, _TEXT_DIM())
 
             ax.text(0.03, y, status, transform=ax.transAxes,
-                    fontsize=9, color=_BG, fontweight=700,
+                    fontsize=9, color=_BG(), fontweight=700,
                     bbox=dict(boxstyle="round,pad=0.3", facecolor=s_color,
                              edgecolor=s_color, alpha=0.9))
             ax.text(0.14, y, name, transform=ax.transAxes,
-                    fontsize=10, color=_BRIGHT, fontweight=500)
+                    fontsize=10, color=_BRIGHT(), fontweight=500)
             ax.text(0.14, y - 0.065, detail, transform=ax.transAxes,
-                    fontsize=9, color=_TEXT)
+                    fontsize=9, color=_TEXT())
             y -= 0.14
 
         # File stats
         ax.text(0.03, y - 0.05,
                 f"GSF: {data.get('gsf_count', 0)}    PDS: {data.get('pds_count', 0)}    "
                 f"Lines: {data.get('total_lines', 0)}    Pings: {data.get('total_pings', 0):,}",
-                transform=ax.transAxes, fontsize=9, color=_TEXT_DIM, fontweight=500)
+                transform=ax.transAxes, fontsize=9, color=_TEXT_DIM(), fontweight=500)
 
         self._fig.tight_layout()
         self._save_home()
@@ -748,14 +783,14 @@ class MBESChartWidget(QFrame):
         """Vessel QC -- PDS vs HVF comparison."""
         self._fig.clear()
         ax = self._fig.add_subplot(111)
-        ax.set_facecolor(_SURFACE)
+        ax.set_facecolor(_SURFACE())
         ax.axis("off")
 
         verdict = data.get("verdict", "N/A")
-        v_color = _VERDICT_COLOR.get(verdict, _TEXT_DIM)
+        v_color = _VERDICT_COLOR().get(verdict, _TEXT_DIM())
 
         ax.set_title("Vessel QC -- PDS vs HVF Comparison", fontsize=14,
-                     fontweight=700, color=_BRIGHT, pad=15)
+                     fontweight=700, color=_BRIGHT(), pad=15)
         _verdict_badge(ax, verdict, v_color)
 
         items = data.get("items", [])
@@ -765,14 +800,14 @@ class MBESChartWidget(QFrame):
             name = it.get("name", "")
             pds_val = it.get("pds_value", "")
             hvf_val = it.get("hvf_value", "")
-            s_color = _VERDICT_COLOR.get(status, _TEXT_DIM)
+            s_color = _VERDICT_COLOR().get(status, _TEXT_DIM())
 
             ax.text(0.02, y, status, transform=ax.transAxes,
-                    fontsize=9, color=_BG, fontweight=700,
+                    fontsize=9, color=_BG(), fontweight=700,
                     bbox=dict(boxstyle="round,pad=0.3", facecolor=s_color,
                              edgecolor=s_color, alpha=0.9))
             ax.text(0.12, y, name, transform=ax.transAxes,
-                    fontsize=10, color=_BRIGHT, fontweight=500)
+                    fontsize=10, color=_BRIGHT(), fontweight=500)
             if pds_val or hvf_val:
                 ax.text(0.45, y, f"PDS: {pds_val}", transform=ax.transAxes,
                         fontsize=9, color=_CYAN)

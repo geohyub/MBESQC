@@ -78,7 +78,7 @@ class MBESQCApp(GeoViewApp):
         ).pack(side="right", padx=5)
 
         ctk.CTkButton(
-            self.header_right, text="▶ QC 실행", width=110, height=30,
+            self.header_right, text="QC 실행", width=110, height=30,
             font=(BASE, 11, "bold"), fg_color=colors.ACCENT,
             hover_color="#2F855A", corner_radius=15,
             command=self._run_qc,
@@ -218,7 +218,7 @@ class MBESQCApp(GeoViewApp):
         ).pack(side="left", padx=12)
 
         ctk.CTkButton(
-            header, text="▶  파일 QC 실행", width=150, height=36,
+            header, text="파일 QC 실행", width=150, height=36,
             font=(BASE, 12, "bold"), fg_color=colors.PRIMARY_LIGHT,
             hover_color="#3B6FA0", corner_radius=10,
             command=self._run_file_qc_only,
@@ -336,7 +336,7 @@ class MBESQCApp(GeoViewApp):
         self._cell_size_entry.pack(side="left", padx=(0, 20))
 
         ctk.CTkButton(
-            params_row, text="▶  서피스 생성", width=150, height=36,
+            params_row, text="서피스 생성", width=150, height=36,
             font=(BASE, 12, "bold"), fg_color=colors.ACCENT,
             hover_color="#2F855A", corner_radius=10,
             command=self._run_surface_build,
@@ -441,7 +441,7 @@ class MBESQCApp(GeoViewApp):
         ).pack(side="left", padx=12)
 
         ctk.CTkButton(
-            header, text="▶  커버리지 분석", width=160, height=36,
+            header, text="커버리지 분석", width=160, height=36,
             font=(BASE, 12, "bold"), fg_color="#805AD5",
             hover_color="#6B46C1", corner_radius=10,
             command=self._run_coverage_qc_only,
@@ -537,7 +537,7 @@ class MBESQCApp(GeoViewApp):
 
         # ── Prominent one-click button ──
         ctk.CTkButton(
-            scroll, text="▶  전체 QC + 보고서 생성", width=300, height=48,
+            scroll, text="전체 QC + 보고서 생성", width=300, height=48,
             font=(BASE, 15, "bold"), fg_color=colors.ACCENT,
             hover_color="#2F855A", corner_radius=10,
             command=self._run_full_qc,
@@ -665,17 +665,17 @@ class MBESQCApp(GeoViewApp):
             p = Path(f)
             size = p.stat().st_size if p.exists() else 0
             size_str = f"{size / 1024:.1f} KB" if size < 1_048_576 else f"{size / 1_048_576:.1f} MB"
-            data.append([p.name, "GSF", size_str, "● 대기"])
+            data.append([p.name, "GSF", size_str, "- 대기"])
         for f in self.pds_files:
             p = Path(f)
             size = p.stat().st_size if p.exists() else 0
             size_str = f"{size / 1024:.1f} KB" if size < 1_048_576 else f"{size / 1_048_576:.1f} MB"
-            data.append([p.name, "PDS", size_str, "● 대기"])
+            data.append([p.name, "PDS", size_str, "- 대기"])
         if self.hvf_path:
             p = Path(self.hvf_path)
             size = p.stat().st_size if p.exists() else 0
             size_str = f"{size / 1024:.1f} KB" if size < 1_048_576 else f"{size / 1_048_576:.1f} MB"
-            data.append([p.name, "HVF", size_str, "● 로드됨"])
+            data.append([p.name, "HVF", size_str, "- 로드됨"])
 
         self._file_table.set_data(data)
         total_files = len(self.gsf_files) + len(self.pds_files)

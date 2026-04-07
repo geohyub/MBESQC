@@ -1,21 +1,15 @@
-"""MBESQC Toast -- Non-blocking notification widget (bottom-right of content area)."""
+"""MBESQC Toast -- Non-blocking notification with slide-in animation (bottom-right)."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QPoint
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout, QGraphicsOpacityEffect
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "_shared"))
-from geoview_pyside6.constants import Dark, Font, Space, Radius
+from geoview_pyside6.constants import Font, Space, Radius
+from geoview_pyside6.theme_aware import c
 
-
-_TOAST_COLORS = {
-    "success": (Dark.GREEN, f"rgba(16,185,129,0.12)"),
-    "warning": (Dark.ORANGE, f"rgba(245,158,11,0.12)"),
-    "error":   (Dark.RED, f"rgba(239,68,68,0.12)"),
-    "info":    (Dark.BLUE, f"rgba(59,130,246,0.12)"),
-}
 
 _TOAST_DURATIONS = {
     "success": 3000,
@@ -23,6 +17,8 @@ _TOAST_DURATIONS = {
     "error":   8000,
     "info":    3000,
 }
+
+_SLIDE_OFFSET = 20  # pixels to slide in from right
 
 
 class ToastWidget(QWidget):
@@ -32,12 +28,19 @@ class ToastWidget(QWidget):
         self.setMinimumWidth(260)
         self.setMaximumWidth(460)
 
-        accent, _ = _TOAST_COLORS.get(level, _TOAST_COLORS["info"])
+        accent_map = {
+            "success": c().GREEN,
+            "warning": c().ORANGE,
+            "error":   c().RED,
+            "info":    c().BLUE,
+        }
+        accent = accent_map.get(level, c().BLUE)
 
+        # c() based theming: NAVY background, accent left border
         self.setStyleSheet(f"""
             ToastWidget {{
-                background: {Dark.NAVY};
-                border: 1px solid {Dark.BORDER};
+                background: {c().NAVY};
+                border: 1px solid {accent};
                 border-left: 3px solid {accent};
                 border-radius: {Radius.SM}px;
             }}
@@ -49,7 +52,7 @@ class ToastWidget(QWidget):
 
         msg_label = QLabel(message)
         msg_label.setStyleSheet(f"""
-            color: {Dark.TEXT};
+            color: {c().TEXT};
             font-size: {Font.SM}px;
             background: transparent;
             border: none;
@@ -57,19 +60,39 @@ class ToastWidget(QWidget):
         msg_label.setWordWrap(True)
         layout.addWidget(msg_label, 1)
 
+        # Opacity effect for fade
         self._opacity = QGraphicsOpacityEffect(self)
         self._opacity.setOpacity(0.0)
         self.setGraphicsEffect(self._opacity)
 
+        # Store target position for slide-in (set by manager)
+        self._target_pos = QPoint(0, 0)
+
+        # Fade-in animation
         self._anim_in = QPropertyAnimation(self._opacity, b"opacity")
         self._anim_in.setDuration(200)
         self._anim_in.setStartValue(0.0)
         self._anim_in.setEndValue(1.0)
         self._anim_in.setEasingCurve(QEasingCurve.OutCubic)
-        self._anim_in.start()
+
+        # Slide-in animation (will be configured by manager)
+        self._slide_in = QPropertyAnimation(self, b"pos")
+        self._slide_in.setDuration(200)
+        self._slide_in.setEasingCurve(QEasingCurve.OutCubic)
 
         duration = _TOAST_DURATIONS.get(level, 3000)
         QTimer.singleShot(duration, self._fade_out)
+
+    def start_entrance(self, target_pos: QPoint):
+        """Start slide-in + fade-in from offset position."""
+        self._target_pos = target_pos
+        start_pos = QPoint(target_pos.x() + _SLIDE_OFFSET, target_pos.y())
+        self.move(start_pos)
+
+        self._slide_in.setStartValue(start_pos)
+        self._slide_in.setEndValue(target_pos)
+        self._slide_in.start()
+        self._anim_in.start()
 
     def _fade_out(self):
         self._anim_out = QPropertyAnimation(self._opacity, b"opacity")
@@ -108,9 +131,9 @@ class ToastManager:
         self._toasts.append(toast)
         toast.destroyed.connect(
             lambda: self._toasts.remove(toast) if toast in self._toasts else None)
-        self._position_toasts()
         toast.show()
         toast.raise_()
+        self._position_toasts()
 
     def _position_toasts(self):
         parent = self._parent
@@ -123,5 +146,6 @@ class ToastManager:
             toast.adjustSize()
             x = parent.width() - toast.width() - margin
             y = parent.height() - toast.height() - y_offset
-            toast.move(max(x, 0), max(y, 0))
+            target = QPoint(max(x, 0), max(y, 0))
+            toast.start_entrance(target)
             y_offset += toast.height() + 8
