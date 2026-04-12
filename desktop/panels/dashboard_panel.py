@@ -19,6 +19,7 @@ from PySide6.QtGui import QColor
 from geoview_pyside6.constants import Font, Space, Radius
 from geoview_pyside6.theme_aware import c
 from geoview_pyside6.widgets import KPICard
+from geoview_pyside6.effects import reveal_widget, stagger_reveal
 
 from desktop.services.data_service import DataService
 
@@ -179,6 +180,7 @@ class DashboardPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._revealed_once = False
         self._build_ui()
         self.refresh()
 
@@ -259,6 +261,26 @@ class DashboardPanel(QWidget):
         layout.addWidget(self._feed_scroll)
 
         self._apply_styles()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._revealed_once:
+            return
+        self._revealed_once = True
+        stagger_reveal(
+            [
+                self._kpi_projects,
+                self._kpi_files,
+                self._kpi_analyzed,
+                self._kpi_score,
+            ],
+            offset_y=8,
+            duration_ms=180,
+            stagger_ms=40,
+        )
+        reveal_widget(self._new_btn, offset_y=8, duration_ms=160)
+        reveal_widget(self._table, offset_y=12, duration_ms=220)
+        reveal_widget(self._feed_scroll, offset_y=14, duration_ms=240)
 
     # ── Theme ──────────────────────────────────────────
 

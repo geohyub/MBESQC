@@ -20,6 +20,7 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QColor
 
 from geoview_pyside6.constants import Font, Space, Radius, STATUS_ICONS, rgba
+from geoview_pyside6.effects import reveal_widget, stagger_reveal
 from geoview_pyside6.theme_aware import c
 from geoview_pyside6.widgets import KPICard
 
@@ -104,6 +105,7 @@ class ProjectDetailPanel(QWidget):
         self._project_id = None
         self._file_ids = []
         self._auto_sync_attempted = False
+        self._revealed_once = False
         self._build_ui()
 
     def get_project_id(self) -> int | None:
@@ -282,6 +284,24 @@ class ProjectDetailPanel(QWidget):
         outer.addWidget(scroll)
 
         self._apply_styles()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._revealed_once:
+            return
+        self._revealed_once = True
+
+        reveal_widget(self._title_label, offset_y=6, duration_ms=170)
+        stagger_reveal(
+            [self._kpi_files, self._kpi_pds, self._kpi_gsf, self._kpi_analyzed],
+            offset_y=8,
+            duration_ms=180,
+            stagger_ms=34,
+        )
+        reveal_widget(self._table, offset_y=12, duration_ms=220)
+        reveal_widget(self._context_scroll, offset_y=12, duration_ms=220)
+        reveal_widget(self._unlock_grid, offset_y=14, duration_ms=230)
+        reveal_widget(self._dash_track, offset_y=14, duration_ms=240)
 
     # ── Theme ──────────────────────────────────────────
 

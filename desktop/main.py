@@ -68,9 +68,6 @@ class MBESQCApp(GeoViewApp):
         # Connect analysis panel toast signal
         self._analysis.toast_requested.connect(self.toast_mgr.show_toast)
 
-        # Keyboard shortcuts
-        self._setup_shortcuts()
-
         # Export state (GC prevention)
         self._export_thread = None
         self._export_worker = None
@@ -173,6 +170,7 @@ class MBESQCApp(GeoViewApp):
         project = DataService.get_project(project_id)
         if project:
             self.top_bar.set_title(project["name"])
+            self.sync_project_context_from_project(project)
 
     def _on_navigate_to_upload(self, project_id: int):
         self._upload.set_project(project_id)
@@ -199,6 +197,9 @@ class MBESQCApp(GeoViewApp):
         self.controller.project_created.emit(project_id)
         self.controller.show_toast(self.t("toast.project_saved", "\ud504\ub85c\uc81d\ud2b8\uac00 \uc800\uc7a5\ub418\uc5c8\uc2b5\ub2c8\ub2e4"), "success")
         self._dashboard.refresh()
+        project = DataService.get_project(project_id)
+        if project:
+            self.sync_project_context_from_project(project)
         self._switch_to("dashboard")
 
     def _on_form_cancelled(self):

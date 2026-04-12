@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt, Signal, QThread, Slot, QObject, QTimer
 from PySide6.QtGui import QPainter, QColor
 
 from geoview_pyside6.constants import Font, Space, Radius, STATUS_ICONS
+from geoview_pyside6.effects import reveal_widget, stagger_reveal
 from geoview_pyside6.theme_aware import c
 from geoview_pyside6.widgets import SuccessOverlay
 
@@ -440,6 +441,7 @@ class AnalysisPanel(QWidget):
         self._chart_pixmap = None
         self._active_qc_id = None
         self._current_detail_items = []
+        self._revealed_once = False
         self._build_ui()
 
     def get_project_id(self) -> int | None:
@@ -1013,6 +1015,41 @@ class AnalysisPanel(QWidget):
         outer.addWidget(scroll)
 
         self._apply_styles()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._revealed_once:
+            return
+        self._revealed_once = True
+
+        stagger_reveal(
+            [self._run_btn, self._score_ring],
+            offset_y=6,
+            duration_ms=160,
+            stagger_ms=36,
+        )
+        stagger_reveal(
+            list(self._cards.values()),
+            offset_y=8,
+            duration_ms=170,
+            stagger_ms=24,
+        )
+        reveal_widget(self._chart, offset_y=12, duration_ms=220)
+        for section in (
+            self._detail_frame,
+            self._line_filter_frame,
+            self._overview_frame,
+            self._spotlight_frame,
+            self._history_frame,
+            self._diff_frame,
+            self._story_frame,
+            self._settings_frame,
+            self._crossline_map,
+            self._bathy_3d,
+            self._track_plot,
+        ):
+            if section.isVisible():
+                reveal_widget(section, offset_y=14, duration_ms=240)
 
     # ── Theme ──────────────────────────────────────────
 
