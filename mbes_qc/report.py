@@ -51,12 +51,15 @@ def _status_color(status: str) -> str:
 
 def _safe_print(*args, **kwargs) -> None:
     """Print using the active console encoding without crashing on cp949."""
+    stream = sys.stdout or sys.__stdout__
+    if stream is None:
+        return
     sep = kwargs.get("sep", " ")
     end = kwargs.get("end", "\n")
     text = sep.join(str(arg) for arg in args) + end
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    encoding = getattr(stream, "encoding", None) or "utf-8"
     safe = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
-    sys.stdout.write(safe)
+    stream.write(safe)
 
 
 def _sanitize_report_text(text: str | None, max_lines: int = 4, max_chars: int = 320) -> str:
@@ -184,6 +187,23 @@ def _extract_verdict(result) -> str:
     return "PASS" if statuses else "N/A"
 
 
+def _aggregate_overall_verdict(verdicts: list[str]) -> str:
+    overall = "N/A"
+    seen_real_verdict = False
+    for verdict in verdicts:
+        verdict_text = str(verdict or "").upper()
+        if verdict_text not in ("PASS", "WARNING", "FAIL"):
+            continue
+        seen_real_verdict = True
+        if verdict_text == "FAIL":
+            return "FAIL"
+        if verdict_text == "WARNING":
+            overall = "WARNING"
+        elif overall == "N/A":
+            overall = "PASS"
+    return overall if seen_real_verdict else "N/A"
+
+
 # ── Excel Report ────────────────────────────────────────────────
 
 
@@ -299,15 +319,14 @@ def generate_excel_report(
     # QC Results header
     qc_start_row = len(info_items) + 4
     summary_rows = []
-    overall = "PASS"
+    verdicts = []
     for category, result in qc_results.items():
         verdict = _extract_verdict(result)
 
         summary_rows.append([category, verdict])
-        if verdict == "FAIL":
-            overall = "FAIL"
-        elif verdict == "WARNING" and overall == "PASS":
-            overall = "WARNING"
+        verdicts.append(verdict)
+
+    overall = _aggregate_overall_verdict(verdicts)
 
     summary_rows.insert(0, ["OVERALL", overall])
 
@@ -399,15 +418,14 @@ def generate_word_report(
     wb.heading("QC Summary", level=1)
 
     summary_rows = []
-    overall = "PASS"
+    verdicts = []
     for category, result in qc_results.items():
         verdict = _extract_verdict(result)
 
         summary_rows.append([category, verdict])
-        if verdict == "FAIL":
-            overall = "FAIL"
-        elif verdict == "WARNING" and overall == "PASS":
-            overall = "WARNING"
+        verdicts.append(verdict)
+
+    overall = _aggregate_overall_verdict(verdicts)
 
     summary_rows.insert(0, ["OVERALL", overall])
     wb.table(
@@ -478,9 +496,10 @@ def print_terminal_report(qc_results: dict) -> None:
     _safe_print("  MBES QC REPORT")
     _safe_print("=" * 70)
 
-    overall = "PASS"
+    verdicts = []
     for category, result in qc_results.items():
         verdict = _extract_verdict(result)
+        verdicts.append(verdict)
 
         _safe_print(f"\n  [{_vc(verdict)}] {category}")
 
@@ -488,10 +507,7 @@ def print_terminal_report(qc_results: dict) -> None:
             s = item.get("status", "N/A")
             _safe_print(f"      {_vc(s):>20s}  {item.get('name', '')}: {item.get('detail', '')}")
 
-        if verdict == "FAIL":
-            overall = "FAIL"
-        elif verdict == "WARNING" and overall == "PASS":
-            overall = "WARNING"
+    overall = _aggregate_overall_verdict(verdicts)
 
     _safe_print("\n" + "=" * 70)
     _safe_print(f"  OVERALL: {_vc(overall)}")

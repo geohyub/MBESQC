@@ -6,7 +6,9 @@
 
 해양 조사 현장에서 수집된 MBES 데이터의 QC를 수행하는 PySide6 데스크톱 앱입니다.
 사전 처리 검증, 인터랙티브 3D 시각화, insight 내러티브, 그리고 Excel/Word/PDF 보고서 출력을 지원합니다.
-센서 오프셋은 OffsetManager의 `offsets.db`를 직접 참조합니다.
+센서 오프셋은 OffsetManager API를 우선 사용하며, 시작 시 `MBESQC_OM_BASE_URL`,
+`MBESQC_OM_TIMEOUT_SECONDS`, 또는 `python -m desktop --om-base-url ... --om-timeout-seconds ...`로
+런타임 경계를 명시적으로 고정할 수 있습니다.
 
 ## Key Features
 
@@ -35,16 +37,26 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
+# Operator self-check
+python -m desktop --self-check
+
+# Operator self-check with a bounded local proof packet
+python -m desktop --self-check --self-check-report .\artifacts\desktop-self-check.json
+
 # PySide6 desktop (권장)
-python desktop/main.py
+python -m desktop
 
 # Legacy web
-python app.py
+python web_app.py
 ```
 
 ## Dependencies
 
-- OffsetManager: API(포트 5302) 우선 사용, 필요 시 프로젝트/환경 변수의 명시적 DB 경로 설정
+- OffsetManager: API(기본 `http://localhost:5302`) 우선 사용, startup/env override 가능
+- Override env vars: `MBESQC_OM_BASE_URL`, `MBESQC_OM_TIMEOUT_SECONDS`
+- DB fallback: 필요할 때만 프로젝트/환경 변수의 명시적 DB 경로 + 확인 상태를 통해 보조 사용
+- Windows launcher: `run.bat`는 self-check를 먼저 출력한 뒤 desktop을 시작함
+- `--self-check-report`는 runtime boundary proof packet만 JSON으로 저장하며, OffsetManager 데이터 무결성이나 project DB proof를 대신하지 않습니다.
 
 ## License
 

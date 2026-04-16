@@ -26,12 +26,17 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 @pytest.fixture(autouse=True)
 def _reset_state():
     import web_app
+    from desktop.services import om_client
 
     web_app._jobs.clear()
     web_app._projects.clear()
+    if hasattr(om_client.OMClient, "configure"):
+        om_client.OMClient.configure(base_url=None, timeout=None)
     yield
     web_app._jobs.clear()
     web_app._projects.clear()
+    if hasattr(om_client.OMClient, "configure"):
+        om_client.OMClient.configure(base_url=None, timeout=None)
 
 
 def _create_offsetmanager_db(
@@ -122,6 +127,52 @@ def test_load_om_configs_prefers_api(monkeypatch):
     assert configs
     assert configs[0]["id"] == 7
     assert configs[0]["vessel_name"] == "Geo Vessel"
+
+
+def test_om_client_uses_env_base_url_override(monkeypatch):
+    from desktop.services import om_client
+
+    calls = []
+
+    class _Response:
+        ok = True
+
+        @staticmethod
+        def json():
+            return []
+
+    def fake_get(url, timeout):
+        calls.append((url, timeout))
+        return _Response()
+
+    monkeypatch.setenv("MBESQC_OM_BASE_URL", "https://offsetmanager.example:5302/")
+    monkeypatch.setattr(om_client.requests, "get", fake_get)
+
+    assert om_client.OMClient.list_configs() == []
+    assert calls == [("https://offsetmanager.example:5302/api/configs", 2)]
+
+
+def test_om_client_falls_back_to_default_for_invalid_env_base_url(monkeypatch):
+    from desktop.services import om_client
+
+    calls = []
+
+    class _Response:
+        ok = True
+
+        @staticmethod
+        def json():
+            return []
+
+    def fake_get(url, timeout):
+        calls.append((url, timeout))
+        return _Response()
+
+    monkeypatch.setenv("MBESQC_OM_BASE_URL", "not-a-url")
+    monkeypatch.setattr(om_client.requests, "get", fake_get)
+
+    assert om_client.OMClient.list_configs() == []
+    assert calls == [("http://localhost:5302/api/configs", 2)]
 
 
 def test_om_resolution_is_unresolved_without_explicit_path(monkeypatch, tmp_path):
@@ -727,6 +778,144 @@ def test_verify_offsets_reports_api_source_without_db_path(monkeypatch):
     assert data["om_comparison"]["provenance"]["fallback_candidate"]["source"] == "unresolved"
     assert data["provenance"]["om"]["decision"]["source"] == "api"
     assert data["provenance"]["om"]["fallback_candidate"]["source"] == "unresolved"
+
+
+def test_verify_offsets_request_sqlite_uses_request_db_semantics(monkeypatch, tmp_path):
+    import web_app
+    from desktop.services import om_client
+
+    project_db = tmp_path / "project_offsets.db"
+    request_db = tmp_path / "request_offsets.db"
+    _create_offsetmanager_db(project_db, vessel_name="Geo Vessel", project_name="Project Alpha", review_state="approved")
+    _create_offsetmanager_db(request_db, vessel_name="Other Vessel", project_name="Other Project", review_state="pending")
+
+    web_app._projects[1] = {
+        "id": 1,
+        "name": "Project Alpha",
+        "vessel": "Geo Vessel",
+        "created_at": "2026-04-03T00:00:00",
+        "pds_files": [],
+        "jobs": [],
+        "offset_db_path": str(project_db),
+        "offset_db_path_confirmed": True,
+        "om_config_id": 7,
+        "offset_config_id": 7,
+    }
+
+    monkeypatch.setattr(om_client.OMClient, "get_config", staticmethod(lambda config_id: None))
+    monkeypatch.setattr(web_app.os.path, "isfile", lambda _: True)
+
+    class _Meta:
+        sections = {"GEOMETRY": {"Offset(MBES)": "MBES,1,2,3"}}
+
+    import pds_toolkit
+    monkeypatch.setattr(pds_toolkit, "read_pds_header", lambda _: _Meta())
+
+    client = web_app.app.test_client()
+    resp = client.post(
+        "/api/verify-offsets",
+        json={
+            "pds_path": "dummy.pds",
+            "om_config_id": 7,
+            "project_id": 1,
+            "offset_db_path": str(request_db),
+            "allow_sqlite_fallback": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["om_lookup"]["source"] == "request"
+    assert data["om_lookup"]["path"] == str(request_db)
+    assert data["om_lookup"]["semantic_state"] == "review-risk"
+    assert data["om_lookup"]["latest_review_state"] == "pending"
+    assert any(
+        check["name"] == "review_state_approved" and not check["passed"]
+        for check in data["om_lookup"]["semantic_checks"]
+    )
+
+
+def test_verify_offsets_selected_api_provenance_uses_api_semantics(monkeypatch, tmp_path):
+    import web_app
+    from desktop.services import om_client
+
+    project_db = tmp_path / "project_offsets.db"
+    request_db = tmp_path / "request_offsets.db"
+    _create_offsetmanager_db(project_db, vessel_name="Geo Vessel", project_name="Project Alpha", review_state="approved")
+    _create_offsetmanager_db(request_db, vessel_name="Other Vessel", project_name="Other Project", review_state="pending")
+
+    web_app._projects[1] = {
+        "id": 1,
+        "name": "Project Alpha",
+        "vessel": "Geo Vessel",
+        "created_at": "2026-04-03T00:00:00",
+        "pds_files": [],
+        "jobs": [],
+        "offset_db_path": str(project_db),
+        "offset_db_path_confirmed": True,
+        "om_config_id": 7,
+        "offset_config_id": 7,
+    }
+
+    monkeypatch.setattr(
+        om_client.OMClient,
+        "get_config",
+        staticmethod(
+            lambda config_id: {
+                "config": {
+                    "id": config_id,
+                    "vessel_name": "Geo Vessel",
+                    "project_name": "Project Alpha",
+                    "config_date": "2026-04-03",
+                    "reference_point": "AP",
+                    "description": "API payload",
+                },
+                "offsets": [
+                    {
+                        "id": 1,
+                        "sensor_name": "MBES",
+                        "sensor_type": "MBES Transducer",
+                        "x_offset": 1.25,
+                        "y_offset": -0.5,
+                        "z_offset": 3.0,
+                        "roll_offset": 0.1,
+                        "pitch_offset": 0.2,
+                        "heading_offset": 0.3,
+                        "latency": 0.01,
+                        "notes": "sample",
+                    }
+                ],
+            }
+        ),
+    )
+    monkeypatch.setattr(web_app.os.path, "isfile", lambda _: True)
+
+    class _Meta:
+        sections = {"GEOMETRY": {"Offset(MBES)": "MBES,1,2,3"}}
+
+    import pds_toolkit
+    monkeypatch.setattr(pds_toolkit, "read_pds_header", lambda _: _Meta())
+
+    client = web_app.app.test_client()
+    resp = client.post(
+        "/api/verify-offsets",
+        json={
+            "pds_path": "dummy.pds",
+            "om_config_id": 7,
+            "project_id": 1,
+            "offset_db_path": str(request_db),
+            "allow_sqlite_fallback": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["om_comparison"]["source"] == "api"
+    assert data["om_comparison"]["fallback_source"] == "request"
+    assert data["om_comparison"]["semantic_state"] == "verified"
+    assert data["provenance"]["om"]["decision"]["source"] == "api"
+    assert data["provenance"]["om"]["semantic"]["state"] == "verified"
+    assert data["provenance"]["om"]["semantic"]["checks"][0]["name"] == "api_available"
 
 
 def test_api_status_exposes_persisted_provenance_summary(monkeypatch):

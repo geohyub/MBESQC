@@ -28,6 +28,7 @@ a = Analysis(
         'desktop.panels.project_form_panel',
         'desktop.panels.dqr_panel',
         'desktop.services.data_service',
+        'desktop.services.om_client',
         'desktop.services.analysis_service',
         'desktop.services.export_service',
         'desktop.services.caris_batch_service',

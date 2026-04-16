@@ -136,6 +136,76 @@ def test_result_json_reloads_with_provenance(monkeypatch, tmp_path):
     assert "db / verified" in story["current_reading"]
 
 
+def test_serialize_full_qc_result_reuses_persisted_typed_provenance(monkeypatch, tmp_path):
+    from desktop.services import analysis_service, data_service
+    from mbes_qc import offset_validator
+
+    db_path = tmp_path / "offsets.db"
+    _create_offsetmanager_db(db_path)
+    monkeypatch.setattr(offset_validator, "read_pds_header", lambda *a, **k: _make_header())
+    monkeypatch.setattr(offset_validator, "read_pds_binary", lambda *a, **k: None)
+
+    validation = offset_validator.validate_offsets(
+        "dummy.pds",
+        offsetmanager_db=str(db_path),
+        config_id=7,
+        check_data=False,
+    )
+    stored_summary = {
+        "has_data": True,
+        "source": "persisted",
+        "mode": "sqlite",
+        "path": str(db_path),
+        "semantic_state": "verified",
+        "semantic_hint": "typed summary already persisted",
+        "semantic_checks_total": 1,
+        "semantic_checks_passed": 1,
+        "request_fallback_enabled": False,
+        "project_fallback_enabled": False,
+        "project_fallback_configured": False,
+        "fallback_scope": "none",
+    }
+    stored_manifest = {
+        "type": "mbesqc.provenance-manifest",
+        "version": 1,
+        "summary": stored_summary,
+        "has_data": True,
+        "source": "persisted",
+        "mode": "sqlite",
+        "path": str(db_path),
+        "semantic_state": "verified",
+        "semantic_hint": "typed summary already persisted",
+        "semantic_checks_total": 1,
+        "semantic_checks_passed": 1,
+        "request_fallback_enabled": False,
+        "project_fallback_enabled": False,
+        "project_fallback_configured": False,
+        "fallback_scope": "none",
+    }
+
+    monkeypatch.setattr(
+        data_service.DataService,
+        "extract_provenance_summary",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected raw provenance summary derivation")),
+    )
+    monkeypatch.setattr(
+        data_service.DataService,
+        "extract_provenance_manifest",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected raw provenance manifest derivation")),
+    )
+
+    serialized = analysis_service.serialize_full_qc_result(
+        SimpleNamespace(
+            offset_validation=validation,
+            provenance_summary=stored_summary,
+            provenance_manifest=stored_manifest,
+        )
+    )
+
+    assert serialized["provenance_summary"] == stored_summary
+    assert serialized["provenance_manifest"] == stored_manifest
+
+
 def test_export_worker_preserves_provenance_sheet(monkeypatch, tmp_path):
     from desktop.services import analysis_service, data_service
     from desktop.services.export_service import ExportWorker
@@ -193,6 +263,180 @@ def test_export_worker_preserves_provenance_sheet(monkeypatch, tmp_path):
     assert any("Raw provenance JSON" in value for value in cell_values)
 
 
+def test_export_worker_redacts_absolute_provenance_paths(monkeypatch, tmp_path):
+    from desktop.services import analysis_service, data_service
+    from desktop.services.export_service import ExportWorker
+    from mbes_qc import offset_validator
+
+    db_path = tmp_path / "offsets.db"
+    _create_offsetmanager_db(db_path)
+    monkeypatch.setattr(offset_validator, "read_pds_header", lambda *a, **k: _make_header())
+    monkeypatch.setattr(offset_validator, "read_pds_binary", lambda *a, **k: None)
+
+    validation = offset_validator.validate_offsets(
+        "dummy.pds",
+        offsetmanager_db=str(db_path),
+        config_id=7,
+        check_data=False,
+    )
+    serialized = analysis_service.serialize_full_qc_result(SimpleNamespace(offset_validation=validation))
+    sensitive_path = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance_summary"]["path"] = sensitive_path
+    serialized["provenance_manifest"]["path"] = sensitive_path
+    serialized["provenance"]["om"]["decision"]["path"] = sensitive_path
+    serialized["provenance"]["om"]["decision"]["filepath"] = sensitive_path
+    serialized["provenance"]["om"]["decision"]["sourceFilePath"] = sensitive_path
+    serialized["provenance"]["om"]["decision"]["db_path"] = sensitive_path
+    serialized["provenance"]["om"]["fallback_candidate"]["path"] = sensitive_path
+    serialized["provenance"]["om"]["fallback_candidate"]["source_path"] = sensitive_path
+    serialized["provenance"]["om"]["fallback_candidate"]["source_filepath"] = sensitive_path
+    serialized["provenance"]["om"]["fallback_candidate"]["sourceFilePath"] = sensitive_path
+    serialized["provenance"]["om"]["semantic"]["path"] = sensitive_path
+    serialized["provenance"]["om"]["resolution_chain"][0]["path"] = sensitive_path
+    serialized["provenance"]["om"]["resolution_chain"][0]["file_path"] = sensitive_path
+    serialized["provenance"]["om"]["resolution_chain"][0]["source_filepath"] = sensitive_path
+    serialized["provenance"]["om"]["resolution_chain"][0]["filePath"] = sensitive_path
+    serialized["provenance"]["om"]["resolution_chain"][1]["path"] = sensitive_path
+    serialized["offset_validation"]["provenance"]["om"]["decision"]["path"] = sensitive_path
+
+    monkeypatch.setattr(data_service, "_DB_PATH", tmp_path / "mbesqc_desktop.db", raising=False)
+    data_service._local.conn = None
+    data_service.DataService.init_db()
+    project_id = data_service.DataService.create_project("Demo", vessel="Geo Vessel")
+    result_id = data_service.DataService.create_qc_result(None, project_id)
+    data_service.DataService.update_qc_result(
+        result_id,
+        status="done",
+        result_json=json.dumps(serialized, ensure_ascii=False),
+    )
+
+    output_path = tmp_path / "redacted_report.xlsx"
+    worker = ExportWorker(project_id, "excel", str(output_path))
+    worker._export_excel()
+
+    import openpyxl
+
+    wb = openpyxl.load_workbook(output_path)
+    ws = wb["Provenance"]
+    cell_values = [str(cell.value) for row in ws.iter_rows() for cell in row if cell.value is not None]
+
+    assert not any("Sensitive" in value for value in cell_values)
+    assert any("offsets.db" in value for value in cell_values)
+    assert any("\"sourceFilePath\": \"offsets.db\"" in value for value in cell_values)
+    assert any("\"source_filepath\": \"offsets.db\"" in value for value in cell_values)
+
+
+def test_export_worker_cleans_temp_chart_files_when_save_fails(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    from desktop.services import chart_renderer, export_service
+    from desktop.services.export_service import ExportWorker
+
+    worker = ExportWorker(7, "excel", str(tmp_path / "report.xlsx"))
+
+    worker._load_export_context = lambda: (
+        {"name": "Demo", "vessel": "Geo Vessel"},
+        [],
+        [],
+        {"status": "done"},
+        {"any": True},
+        {
+            "snapshot_text": "Snapshot",
+            "flow": "Flow",
+            "offset_text": "Offset",
+            "readiness_text": "Ready",
+        },
+        {
+            "headline": "Headline",
+            "body": "Body",
+            "next_steps": ["Next"],
+        },
+        [
+            {
+                "module": "Offset",
+                "status": "PASS",
+                "importance": "Why it matters",
+                "current_reading": "Reading",
+                "next_steps": ["Check"],
+            }
+        ],
+        [
+            {
+                "snapshot": "Snapshot",
+                "score": "1.0",
+                "grade": "A",
+                "status": "done",
+                "completed": "2026-04-13",
+            }
+        ],
+        [],
+        [],
+        {"headline": "History", "body": "History body"},
+        {"body": "Diff body"},
+        {
+            "current_state": ["state"],
+            "recommendations": ["rec"],
+        },
+        {
+            "has_data": True,
+            "summary": {
+                "has_data": True,
+                "source": "db",
+                "semantic_state": "verified",
+                "semantic_checks_total": 1,
+                "semantic_checks_passed": 1,
+            },
+            "decision": {
+                "source": "db",
+                "path": "offsets.db",
+            },
+            "semantic": {
+                "state": "verified",
+                "hint": "ok",
+                "checks": [{"passed": True}],
+            },
+            "resolution_chain": [{"source": "db"}],
+        },
+    )
+
+    png_bytes = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+        b"\x08\x02\x00\x00\x00\x90wS\xde"
+        b"\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+        b"\xe2!\xbc3\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    created_paths: list[Path] = []
+    real_named_tempfile = export_service.tempfile.NamedTemporaryFile
+
+    def _fake_named_tempfile(*args, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs["dir"] = str(tmp_path)
+        handle = real_named_tempfile(*args, **kwargs)
+        created_paths.append(Path(handle.name))
+        return handle
+
+    def _fake_render_qc_radar(*_args, **_kwargs):
+        return png_bytes
+
+    def _fail_save(self, *_args, **_kwargs):
+        raise RuntimeError("save failed")
+
+    monkeypatch.setattr(chart_renderer, "render_qc_radar", _fake_render_qc_radar)
+    monkeypatch.setattr(export_service.tempfile, "NamedTemporaryFile", _fake_named_tempfile)
+
+    import openpyxl.workbook.workbook as workbook_module
+
+    monkeypatch.setattr(workbook_module.Workbook, "save", _fail_save)
+
+    with pytest.raises(RuntimeError, match="save failed"):
+        worker._export_excel()
+
+    assert created_paths, "expected a chart temp file to be created"
+    assert all(not path.exists() for path in created_paths)
+    assert not list(tmp_path.glob("mbesqc_radar_*.png"))
+
+
 def test_download_payload_includes_provenance_manifest(monkeypatch, tmp_path):
     from desktop.services import analysis_service, data_service
     import web_app
@@ -210,6 +454,19 @@ def test_download_payload_includes_provenance_manifest(monkeypatch, tmp_path):
         check_data=False,
     )
     serialized = analysis_service.serialize_full_qc_result(SimpleNamespace(offset_validation=validation))
+    serialized["provenance"]["om"]["decision"]["uri"] = "file:///E:/Sensitive/Boundary/offsets.db"
+    serialized["provenance"]["om"]["decision"]["filepath"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["decision"]["sourceFilePath"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["decision"]["db_path"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["fallback_candidate"]["uri"] = "https://offsetmanager.example/api/configs"
+    serialized["provenance"]["om"]["fallback_candidate"]["source_path"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["fallback_candidate"]["source_filepath"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["fallback_candidate"]["sourceFilePath"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["resolution_chain"][0]["uri"] = "file:///E:/Sensitive/Boundary/offsets.db"
+    serialized["provenance"]["om"]["resolution_chain"][0]["file_path"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["resolution_chain"][0]["source_filepath"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["resolution_chain"][0]["filePath"] = r"E:\Sensitive\Boundary\offsets.db"
+    serialized["provenance"]["om"]["resolution_chain"][1]["uri"] = "https://offsetmanager.example/api/configs"
 
     monkeypatch.setattr(data_service, "_DB_PATH", tmp_path / "mbesqc_desktop.db", raising=False)
     data_service._local.conn = None
@@ -228,6 +485,18 @@ def test_download_payload_includes_provenance_manifest(monkeypatch, tmp_path):
     )
 
     payload = web_app._build_job_download_payload(web_app._jobs[1])
+    payload_text = json.dumps(payload, ensure_ascii=False)
     assert payload["provenance_summary"]["source"] == "db"
     assert payload["provenance_manifest"]["type"] == "mbesqc.provenance-manifest"
     assert payload["provenance_manifest"]["summary"] == payload["provenance_summary"]
+    assert payload["provenance"]["om"]["decision"]["uri"] == "<redacted:uri>"
+    assert payload["provenance"]["om"]["decision"]["filepath"] == "offsets.db"
+    assert payload["provenance"]["om"]["decision"]["sourceFilePath"] == "offsets.db"
+    assert payload["provenance"]["om"]["decision"]["db_path"] == "offsets.db"
+    assert payload["provenance"]["om"]["fallback_candidate"]["uri"] == "<redacted:uri>"
+    assert payload["provenance"]["om"]["fallback_candidate"]["source_path"] == "offsets.db"
+    assert payload["provenance"]["om"]["fallback_candidate"]["source_filepath"] == "offsets.db"
+    assert payload["provenance"]["om"]["fallback_candidate"]["sourceFilePath"] == "offsets.db"
+    assert payload["provenance"]["om"]["resolution_chain"][0]["source_filepath"] == "offsets.db"
+    assert payload["provenance"]["om"]["resolution_chain"][0]["filePath"] == "offsets.db"
+    assert "Sensitive" not in payload_text

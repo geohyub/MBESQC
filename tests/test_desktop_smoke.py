@@ -38,6 +38,20 @@ def test_panels_exist(app):
         assert stack.count() > 0, "패널이 하나도 없음"
 
 
+def test_desktop_panels_fail_closed_to_theme_surface(app):
+    """대표 패널과 스크롤 viewport가 공통 테마 surface 계약을 따르는지 확인."""
+    from desktop.main import MBESQCApp
+
+    window = MBESQCApp()
+    try:
+        for panel in window._panels.values():
+            assert panel.property("gvSurfaceRole") == "page"
+
+        assert window._dashboard._feed_scroll.viewport().property("gvSurfaceRole") == "scroll-viewport"
+    finally:
+        window.close()
+
+
 def test_py_compile():
     """desktop/ 하위 모든 .py 파일이 py_compile 통과하는지 확인."""
     import py_compile

@@ -12,11 +12,12 @@ import os
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame, QVBoxLayout, QLabel, QPushButton,
-    QFileDialog, QSizePolicy,
+    QFileDialog, QSizePolicy, QMessageBox,
 )
 
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "_shared"))
+from geoview_common.file_validator import validate_files
 from geoview_pyside6.constants import Font, Space, Radius
 from geoview_pyside6.theme_aware import c
 
@@ -154,8 +155,7 @@ class DropZone(QFrame):
             elif os.path.isdir(path):
                 paths.append(path)
 
-        if paths:
-            self.files_dropped.emit(paths)
+        self._emit_valid_paths(paths)
 
     def _browse_files(self):
         ext_filter = (
@@ -163,5 +163,18 @@ class DropZone(QFrame):
             "All Files (*)"
         )
         paths, _ = QFileDialog.getOpenFileNames(self, "파일 선택", "", ext_filter)
-        if paths:
-            self.files_dropped.emit(paths)
+        self._emit_valid_paths(paths)
+
+    def _emit_valid_paths(self, paths: list[str]):
+        directories = [path for path in paths if os.path.isdir(path)]
+        file_paths = [path for path in paths if os.path.isfile(path)]
+        valid_paths, errors = validate_files(
+            file_paths,
+            min_size=1024,
+            extensions=SUPPORTED_EXTENSIONS,
+        )
+        if errors:
+            QMessageBox.warning(self, "파일 확인", errors[0][1])
+        emitted = directories + valid_paths
+        if emitted:
+            self.files_dropped.emit(emitted)

@@ -68,7 +68,7 @@ def _extract_export_provenance(latest_data: dict | None) -> dict:
     if not isinstance(resolution_chain, list):
         resolution_chain = []
 
-    return {
+    return _redact_export_provenance_paths({
         "raw": raw,
         "summary": summary,
         "om": om,
@@ -78,7 +78,74 @@ def _extract_export_provenance(latest_data: dict | None) -> dict:
         "resolution_chain": resolution_chain,
         "manifest": manifest,
         "has_data": bool(summary.get("has_data") or raw or semantic_checks),
-    }
+    })
+
+
+def _redact_export_path(value) -> str:
+    """Collapse a local filesystem path to its basename for shared exports."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, dict):
+        return _redact_export_provenance_paths(value)
+    if isinstance(value, list):
+        return [_redact_export_path(item) for item in value]
+    try:
+        return Path(str(value)).name or str(value)
+    except Exception:
+        return str(value)
+
+
+def _redact_export_uri(value) -> str:
+    """Collapse a URI-like value to a non-sensitive placeholder."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, dict):
+        return _redact_export_provenance_paths(value)
+    if isinstance(value, list):
+        return [_redact_export_uri(item) for item in value]
+    text = str(value)
+    if "://" in text:
+        return "<redacted:uri>"
+    return _redact_export_path(text)
+
+
+def _is_export_path_key(key) -> bool:
+    key_text = str(key).strip().lower()
+    collapsed = key_text.replace("_", "")
+    return (
+        key_text in {"path", "filepath", "file_path", "db_path", "source_path", "source_filepath"}
+        or collapsed in {"path", "filepath", "dbpath", "sourcepath", "sourcefilepath"}
+        or key_text.endswith("_path")
+        or key_text.endswith("_filepath")
+    )
+
+
+def _is_export_uri_key(key) -> bool:
+    key_text = str(key).strip().lower()
+    collapsed = key_text.replace("_", "")
+    return (
+        key_text in {"uri", "url", "source_uri", "source_url"}
+        or collapsed in {"uri", "url", "sourceuri", "sourceurl"}
+        or key_text.endswith("_uri")
+        or key_text.endswith("_url")
+    )
+
+
+def _redact_export_provenance_paths(value):
+    """Redact path-bearing fields from a provenance payload copy."""
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if _is_export_path_key(key):
+                redacted[key] = _redact_export_path(item)
+            elif _is_export_uri_key(key):
+                redacted[key] = _redact_export_uri(item)
+            else:
+                redacted[key] = _redact_export_provenance_paths(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_export_provenance_paths(item) for item in value]
+    return value
 
 
 def _format_provenance_summary_value(summary: dict) -> str:
@@ -428,7 +495,12 @@ class ExportWorker(QObject):
             ws_prov.cell(row=json_row, column=1, value="Raw provenance JSON").font = h_font
             ws_prov.cell(row=json_row, column=1).fill = h_fill
             ws_prov.cell(row=json_row, column=1).border = thin
-            raw_json = json.dumps(provenance.get("raw") or {}, ensure_ascii=False, indent=2, sort_keys=True)
+            raw_json = json.dumps(
+                _redact_export_provenance_paths(provenance.get("raw") or {}),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
             ws_prov.cell(row=json_row + 1, column=1, value=raw_json)
             ws_prov.cell(row=json_row + 1, column=1).font = XlFont(name="Consolas", size=10)
             ws_prov.cell(row=json_row + 1, column=1).alignment = wrap
@@ -478,13 +550,14 @@ class ExportWorker(QObject):
             import logging
             logging.getLogger(__name__).warning("Chart generation skipped: %s", chart_err)
 
-        wb.save(self._output_path)
-
-        for tmp_path in temp_files:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        try:
+            wb.save(self._output_path)
+        finally:
+            for tmp_path in temp_files:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
 
     def _export_word(self):
         """Generate Word report with python-docx."""
@@ -579,7 +652,12 @@ class ExportWorker(QObject):
             doc.add_heading("Provenance", level=1)
             for line in _format_export_provenance_lines(provenance):
                 doc.add_paragraph(line, style="List Bullet")
-            raw_json = json.dumps(provenance.get("raw") or {}, ensure_ascii=False, indent=2, sort_keys=True)
+            raw_json = json.dumps(
+                _redact_export_provenance_paths(provenance.get("raw") or {}),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
             doc.add_paragraph("Raw provenance JSON")
             doc.add_paragraph(raw_json)
 

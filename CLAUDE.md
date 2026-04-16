@@ -9,7 +9,14 @@
 
 ## 의존성 주의
 
-OffsetManager의 offsets.db를 직접 참조 (web_app.py:41). DB 스키마 변경 시 깨짐.
+OffsetManager 접근은 `desktop/services/om_client.py`의 runtime boundary를 통해서만 핀셋처럼 조절한다.
+기본값은 `http://localhost:5302`이며, 시작 시 `MBESQC_OM_BASE_URL` / `MBESQC_OM_TIMEOUT_SECONDS`
+또는 `python -m desktop --om-base-url ... --om-timeout-seconds ...` /
+`desktop.main.main(om_base_url=..., om_timeout_seconds=...)`로만 오버라이드한다.
+숨은 env DB fallback은 사용하지 않는다.
+
+운영자 기본 진입점은 `python -m desktop --self-check`로 OM 경계를 먼저 확인한 뒤
+`python -m desktop` 또는 `run.bat`로 본 앱을 시작하는 경로다.
 
 ## 품질 게이트
 

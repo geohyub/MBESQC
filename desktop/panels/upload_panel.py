@@ -18,6 +18,7 @@ from PySide6.QtCore import Qt, Signal, QObject, QThread, Slot
 
 from geoview_pyside6.constants import Font, Space, Radius, rgba
 from geoview_pyside6.theme_aware import c
+from geoview_common.file_validator import validate_file
 
 from desktop.services.data_service import DataService
 from geoview_pyside6.widgets import FileDropZone
@@ -47,6 +48,9 @@ class _ScanWorker(QObject):
 
             for f in sorted(d.iterdir()):
                 if f.is_file() and f.suffix.lower() in exts:
+                    is_valid, _ = validate_file(f, min_size=1024, extensions=exts)
+                    if not is_valid:
+                        continue
                     size_mb = f.stat().st_size / (1024 * 1024)
                     fmt = f.suffix.lower().lstrip(".")
                     DataService.add_file(
@@ -100,6 +104,7 @@ class UploadPanel(QWidget):
             accepted_extensions={".pds", ".gsf", ".hvf", ".s7k", ".xtf", ".fau", ".gpt", ".csv"},
             title="PDS/GSF/HVF 파일을 여기에 드래그하거나",
             icon_name="upload",
+            min_size=1024,
         )
         self._drop_zone.files_dropped.connect(self._on_files_dropped)
         layout.addWidget(self._drop_zone)
@@ -256,6 +261,9 @@ class UploadPanel(QWidget):
                 return
 
             f = Path(path)
+            is_valid, _ = validate_file(f, min_size=1024)
+            if not is_valid:
+                continue
             size_mb = f.stat().st_size / (1024 * 1024)
             fmt = f.suffix.lower().lstrip(".")
             DataService.add_file(self._project_id, f.name, str(f), size_mb, fmt)

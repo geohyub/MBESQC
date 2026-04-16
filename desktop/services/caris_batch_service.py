@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import subprocess
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,32 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal, Slot
 
 log = logging.getLogger(__name__)
+
+
+def _redact_path_for_log(value: str | os.PathLike[str] | None) -> str:
+    """Return a log-safe representation for an absolute local path or file URI."""
+    if value is None:
+        return ""
+
+    text = os.fspath(value)
+    if text.startswith("file:///"):
+        return "file:///<redacted>"
+
+    if re.match(r"^[A-Za-z]:[\\/]", text) or text.startswith("\\\\"):
+        return "<redacted:path>"
+
+    try:
+        path = Path(text)
+    except TypeError:
+        return text
+
+    if path.is_absolute():
+        return "<redacted:path>"
+    return text
+
+
+def _format_cmd_for_log(cmd: list[str]) -> str:
+    return " ".join(_redact_path_for_log(token) for token in cmd)
 
 
 def find_carisbatch() -> Optional[str]:
@@ -207,7 +234,7 @@ class CarisBatchRunner(QObject):
             self._last_cmd_output = "carisbatch executable not found"
             return False, self._last_cmd_output
         cmd = [self._exe, "--run"] + args
-        log.info("carisbatch: %s", " ".join(cmd))
+        log.info("carisbatch: %s", _format_cmd_for_log(cmd))
 
         try:
             result = subprocess.run(
@@ -249,7 +276,7 @@ class CarisBatchRunner(QObject):
         hips_path = Path(self._config.hips_file) if self._config.hips_file else None
 
         if hips_path and hips_path.is_file():
-            log.info("HIPS file exists, skipping creation: %s", hips_path)
+            log.info("HIPS file exists, skipping creation: %s", _redact_path_for_log(hips_path))
             return True
 
         if not self._config.input_files:
@@ -269,10 +296,10 @@ class CarisBatchRunner(QObject):
             "CreateHIPSFile",
             str(hips_path),
         ]
-        log.info("exe=%s, hips=%s", self._exe, hips_path)
+        log.info("exe=%s, hips=%s", _redact_path_for_log(self._exe), _redact_path_for_log(hips_path))
         ok, output = self._run_cmd(args)
         if ok:
-            log.info("HIPS project created: %s", hips_path)
+            log.info("HIPS project created: %s", _redact_path_for_log(hips_path))
         return ok
 
     # Extension → carisbatch input-format mapping
@@ -474,7 +501,7 @@ class CarisBatchRunner(QObject):
             ]
             ok, out = self._run_cmd(args)
             if ok:
-                log.info("Depth surface exported: %s", depth_tif)
+                log.info("Depth surface exported: %s", _redact_path_for_log(depth_tif))
             else:
                 log.warning("Failed to export depth surface: %s", out[:200])
 
@@ -502,7 +529,7 @@ class CarisBatchRunner(QObject):
             ]
             ok, out = self._run_cmd(args)
             if ok:
-                log.info("TPU surface exported: %s", tpu_tif)
+                log.info("TPU surface exported: %s", _redact_path_for_log(tpu_tif))
 
             # Export TPU band values (Depth_TPU=TVU, Position_TPU=THU)
             tpu_txt = out_dir / "tpu_bands.txt"
@@ -515,7 +542,7 @@ class CarisBatchRunner(QObject):
             ]
             ok_tpu, _ = self._run_cmd(args)
             if ok_tpu:
-                log.info("TPU bands exported: %s", tpu_txt)
+                log.info("TPU bands exported: %s", _redact_path_for_log(tpu_txt))
 
         return True
 
@@ -538,7 +565,7 @@ class CarisBatchRunner(QObject):
         ok, _ = self._run_cmd(args)
         if ok:
             count = len(list(gsf_dir.glob("*.gsf")))
-            log.info("GSF exported: %d files to %s", count, gsf_dir)
+            log.info("GSF exported: %d files to %s", count, _redact_path_for_log(gsf_dir))
         return ok
 
 

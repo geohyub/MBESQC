@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import logging
 import time
 import threading
 from io import BytesIO
@@ -25,6 +26,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("MBESQC_SECRET", os.urandom(24).hex())
+logger = logging.getLogger(__name__)
 
 
 @app.template_filter('basename')
@@ -396,6 +398,55 @@ def _project_sqlite_fallback_status(project: dict | None) -> dict:
     return status
 
 
+def _request_sqlite_fallback_status(request_path: str | Path, allow_request_path: bool) -> dict:
+    """Inspect a request-supplied OffsetManager DB without project metadata reuse."""
+    fake_project = {
+        "offset_db_path": str(request_path),
+        "offset_db_path_confirmed": allow_request_path,
+    }
+    status = _project_sqlite_fallback_status(fake_project)
+
+    normalized_checks: list[dict] = []
+    for check in status.get("semantic_checks", []):
+        normalized = dict(check)
+        if normalized.get("name") == "project_db_path_exists":
+            normalized["name"] = "request_db_path_exists"
+            normalized["detail"] = (
+                "요청한 OffsetManager DB 경로가 존재합니다."
+                if normalized.get("passed")
+                else "요청한 OffsetManager DB 경로가 존재하지 않습니다."
+            )
+        elif normalized.get("name") == "fallback_confirmation":
+            normalized["name"] = "request_path_allowed"
+            normalized["detail"] = (
+                "명시적 SQLite fallback 요청이 허용되었습니다."
+                if normalized.get("passed")
+                else "명시적 SQLite fallback 요청이 허용되지 않았습니다."
+            )
+        normalized_checks.append(normalized)
+
+    status["semantic_checks"] = normalized_checks
+    if status.get("semantic_state") == "verified":
+        status["semantic_hint"] = "요청 SQLite DB의 구조와 최신 config를 읽었습니다."
+    elif status.get("semantic_state") == "review-risk":
+        latest_review_state = status.get("latest_review_state", "")
+        status["semantic_hint"] = (
+            f"요청 SQLite DB의 최신 config review_state가 '{latest_review_state}'라 사용을 보류합니다."
+            if latest_review_state
+            else "요청 SQLite DB의 최신 config review_state가 비어 있어 사용을 보류합니다."
+        )
+    elif status.get("semantic_state") == "missing":
+        status["semantic_hint"] = "요청 SQLite DB 경로가 존재하지 않습니다."
+    elif status.get("semantic_state") == "schema-risk":
+        status["semantic_hint"] = "요청 SQLite DB의 스키마를 OffsetManager 기준으로 확인하지 못했습니다."
+    elif status.get("semantic_state") == "empty":
+        status["semantic_hint"] = "요청 SQLite DB의 vessel_configs에 레코드가 없습니다."
+
+    status["configured"] = True
+    status["confirmed"] = bool(allow_request_path)
+    return status
+
+
 def _project_sqlite_fallback_state(project: dict | None) -> tuple[bool, bool]:
     """Return whether a project has a stored path and whether it is confirmed."""
     status = _project_sqlite_fallback_status(project)
@@ -450,6 +501,7 @@ def _describe_om_resolution(
     project_enabled = bool(project_status["enabled"])
 
     if request_supplied and allow_request_path and request_exists:
+        request_status = _request_sqlite_fallback_status(explicit, allow_request_path)
         return {
             "source": "request",
             "source_label": "요청 DB 경로",
@@ -461,18 +513,18 @@ def _describe_om_resolution(
             "request_fallback_enabled": True,
             "project_fallback_configured": project_configured,
             "project_fallback_enabled": project_enabled,
-            "semantic_state": project_status["semantic_state"],
-            "semantic_hint": project_status["semantic_hint"],
-            "semantic_checks": project_status["semantic_checks"],
-            "schema_version": project_status["schema_version"],
-            "latest_vessel_name": project_status["latest_vessel_name"],
-            "latest_project_name": project_status["latest_project_name"],
-            "latest_config_date": project_status["latest_config_date"],
-            "latest_updated_at": project_status["latest_updated_at"],
-            "latest_review_state": project_status["latest_review_state"],
-            "stale_risk": project_status["stale_risk"],
-            "schema_ok": project_status["schema_ok"],
-            "hint": "요청에서 전달된 SQLite 경로를 사용할 수 있습니다." if explicit.exists() else "요청 경로가 존재하지 않습니다.",
+            "semantic_state": request_status["semantic_state"],
+            "semantic_hint": request_status["semantic_hint"],
+            "semantic_checks": request_status["semantic_checks"],
+            "schema_version": request_status["schema_version"],
+            "latest_vessel_name": request_status["latest_vessel_name"],
+            "latest_project_name": request_status["latest_project_name"],
+            "latest_config_date": request_status["latest_config_date"],
+            "latest_updated_at": request_status["latest_updated_at"],
+            "latest_review_state": request_status["latest_review_state"],
+            "stale_risk": request_status["stale_risk"],
+            "schema_ok": request_status["schema_ok"],
+            "hint": request_status["semantic_hint"] or "요청에서 전달된 SQLite 경로를 사용할 수 있습니다.",
         }
 
     if project_configured and project and project_enabled:
@@ -614,6 +666,8 @@ def _describe_om_api_source() -> OMResolution:
         "fallback_scope": "none",
         "request_path_supplied": False,
         "request_fallback_enabled": False,
+        "semantic_state": "verified",
+        "semantic_hint": "OffsetManager API 응답을 사용했습니다.",
         "hint": "OffsetManager API 응답을 사용했습니다. 명시적 SQLite fallback은 사용하지 않았습니다.",
         "semantic_checks": [
             {
@@ -672,7 +726,7 @@ def _build_om_provenance(
     """Compose a typed provenance envelope for machine-readable MBESQC responses."""
     selected = decision or fallback_candidate or {}
     fallback = fallback_candidate or {}
-    semantic_source = fallback if fallback else selected
+    semantic_source = selected
     return {
         "decision": _snapshot_om_resolution(selected),
         "fallback_candidate": _snapshot_om_resolution(fallback),
@@ -942,12 +996,20 @@ def api_pds_info():
                 kl = key.lower()
                 if "staticroll" in kl:
                     for p in reversed(val.split(",")):
-                        try: static_roll = float(p.strip()); break
-                        except: continue
+                        try:
+                            static_roll = float(p.strip())
+                            break
+                        except ValueError:
+                            logger.debug("Ignoring invalid static roll value: %s", p, exc_info=True)
+                            continue
                 elif "staticpitch" in kl:
                     for p in reversed(val.split(",")):
-                        try: static_pitch = float(p.strip()); break
-                        except: continue
+                        try:
+                            static_pitch = float(p.strip())
+                            break
+                        except ValueError:
+                            logger.debug("Ignoring invalid static pitch value: %s", p, exc_info=True)
+                            continue
                 elif "applyroll" in kl and "static" not in kl:
                     apply_roll = ",1" in val
                 elif "applypitch" in kl and "static" not in kl:
@@ -2273,6 +2335,73 @@ def _extract_job_provenance_manifest(result: dict | None) -> dict:
         return {}
 
 
+def _redact_download_path(value):
+    """Collapse a local filesystem path to a stable non-sensitive token."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, dict):
+        return _redact_download_payload_paths(value)
+    if isinstance(value, list):
+        return [_redact_download_path(item) for item in value]
+    try:
+        return Path(str(value)).name or str(value)
+    except Exception:
+        return str(value)
+
+
+def _redact_download_uri(value):
+    """Collapse a URI-like value to a safe placeholder."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, dict):
+        return _redact_download_payload_paths(value)
+    if isinstance(value, list):
+        return [_redact_download_uri(item) for item in value]
+    text = str(value)
+    if "://" in text:
+        return "<redacted:uri>"
+    return _redact_download_path(text)
+
+
+def _is_download_path_key(key) -> bool:
+    key_text = str(key).strip().lower()
+    collapsed = key_text.replace("_", "")
+    return (
+        key_text in {"path", "filepath", "file_path", "db_path", "source_path", "source_filepath"}
+        or collapsed in {"path", "filepath", "dbpath", "sourcepath", "sourcefilepath"}
+        or key_text.endswith("_path")
+        or key_text.endswith("_filepath")
+    )
+
+
+def _is_download_uri_key(key) -> bool:
+    key_text = str(key).strip().lower()
+    collapsed = key_text.replace("_", "")
+    return (
+        key_text in {"uri", "url", "source_uri", "source_url"}
+        or collapsed in {"uri", "url", "sourceuri", "sourceurl"}
+        or key_text.endswith("_uri")
+        or key_text.endswith("_url")
+    )
+
+
+def _redact_download_payload_paths(value):
+    """Redact local path/URI fields from a JSON download payload copy."""
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if _is_download_path_key(key):
+                redacted[key] = _redact_download_path(item)
+            elif _is_download_uri_key(key):
+                redacted[key] = _redact_download_uri(item)
+            else:
+                redacted[key] = _redact_download_payload_paths(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_download_payload_paths(item) for item in value]
+    return value
+
+
 def _build_job_download_payload(job: dict | None) -> dict:
     """Return a machine-readable QC snapshot for JSON downloads."""
     if not isinstance(job, dict):
@@ -2288,7 +2417,7 @@ def _build_job_download_payload(job: dict | None) -> dict:
     if not payload:
         return {}
 
-    payload = dict(payload)
+    payload = _redact_download_payload_paths(dict(payload))
     provenance_summary = payload.get("provenance_summary") or _extract_job_provenance_summary(payload)
     if provenance_summary:
         payload["provenance_summary"] = provenance_summary

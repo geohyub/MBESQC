@@ -115,6 +115,26 @@ def _items_verdict(items) -> str:
     return "PASS" if statuses else "N/A"
 
 
+def _stored_provenance_summary(result, offset_validation) -> dict:
+    """Return an already attached typed provenance summary if one exists."""
+    summary = getattr(result, "provenance_summary", None)
+    if not isinstance(summary, dict) and offset_validation is not None:
+        summary = getattr(offset_validation, "provenance_summary", None)
+    if isinstance(summary, dict):
+        return DataService._normalize_provenance_summary(summary)
+    return {}
+
+
+def _stored_provenance_manifest(result, offset_validation) -> dict:
+    """Return an already attached typed provenance manifest if one exists."""
+    manifest = getattr(result, "provenance_manifest", None)
+    if not isinstance(manifest, dict) and offset_validation is not None:
+        manifest = getattr(offset_validation, "provenance_manifest", None)
+    if isinstance(manifest, dict):
+        return manifest
+    return {}
+
+
 def serialize_full_qc_result(result) -> dict:
     """Convert FullQcResult → JSON-serializable dict for DB storage."""
     d = {"elapsed_sec": _sf(getattr(result, "elapsed_sec", 0))}
@@ -229,10 +249,32 @@ def serialize_full_qc_result(result) -> dict:
         except Exception:
             pass
 
-    provenance_summary = DataService.extract_provenance_summary(d)
+    provenance_summary = _stored_provenance_summary(result, ov)
+    if not provenance_summary:
+        provenance_summary = DataService.extract_provenance_summary(d)
     if provenance_summary.get("has_data"):
         d["provenance_summary"] = provenance_summary
-        provenance_manifest = DataService.extract_provenance_manifest(d)
+        provenance_manifest = _stored_provenance_manifest(result, ov)
+        if not provenance_manifest:
+            provenance_manifest = {
+                "type": "mbesqc.provenance-manifest",
+                "version": 1,
+                "summary": provenance_summary,
+                "has_data": provenance_summary.get("has_data", False),
+                "source": provenance_summary.get("source", ""),
+                "mode": provenance_summary.get("mode", ""),
+                "path": provenance_summary.get("path", ""),
+                "semantic_state": provenance_summary.get("semantic_state", ""),
+                "semantic_hint": provenance_summary.get("semantic_hint", ""),
+                "semantic_checks_total": provenance_summary.get("semantic_checks_total", 0),
+                "semantic_checks_passed": provenance_summary.get("semantic_checks_passed", 0),
+                "request_fallback_enabled": provenance_summary.get("request_fallback_enabled", False),
+                "project_fallback_enabled": provenance_summary.get("project_fallback_enabled", False),
+                "project_fallback_configured": provenance_summary.get("project_fallback_configured", False),
+                "fallback_scope": provenance_summary.get("fallback_scope", ""),
+            }
+        if not provenance_manifest:
+            provenance_manifest = DataService.extract_provenance_manifest(d)
         if provenance_manifest:
             d["provenance_manifest"] = provenance_manifest
 
