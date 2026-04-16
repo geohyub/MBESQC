@@ -136,7 +136,7 @@ def _CARD():     return c().NAVY
 def _GRID():     return c().SLATE
 def _BORDER():   return c().BORDER_H
 def _TEXT():     return c().MUTED
-def _TEXT_DIM(): return c().DIM
+def _TEXT_DIM(): return c().MUTED
 def _BRIGHT():   return c().TEXT_BRIGHT
 
 _GREEN    = "#34D399"

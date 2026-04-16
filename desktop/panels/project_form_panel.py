@@ -26,7 +26,7 @@ def _btn_primary_qss() -> str:
     return f"""
         QPushButton {{
             background: {c().CYAN};
-            color: #ffffff;
+            color: {c().TEXT_BRIGHT};
             border: none;
             border-radius: {Radius.BASE}px;
             font-size: {Font.SM}px;
@@ -36,7 +36,7 @@ def _btn_primary_qss() -> str:
         QPushButton:hover {{ background: {c().CYAN_H}; }}
         QPushButton:disabled {{
             background: {c().SLATE};
-            color: {c().DIM};
+            color: {c().MUTED};
         }}
     """
 

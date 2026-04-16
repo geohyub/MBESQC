@@ -34,6 +34,65 @@ from desktop.widgets.qc_unlock_grid import QCUnlockGrid
 from geoview_pyside6.widgets.track_plot import TrackPlot, LineRoute
 
 
+def _resolve_file_result_display(file_id: int, result_map: dict, latest_result: dict | None) -> dict:
+    """Return a truth-preserving display model for one file row.
+
+    Never project a project-level snapshot score onto a file row.
+    """
+    r = result_map.get(file_id)
+    if r and r.get("status") == "done":
+        return {
+            "score": float(r.get("score", 0) or 0),
+            "status_text": f"{STATUS_ICONS.get('DONE', '')} DONE",
+            "status_kind": "done",
+        }
+    if r and r.get("status") == "running":
+        return {
+            "score": None,
+            "status_text": f"{STATUS_ICONS.get('RUNNING', '')} RUNNING",
+            "status_kind": "running",
+        }
+    if latest_result and latest_result.get("status") == "done":
+        return {
+            "score": None,
+            "status_text": "SEE PROJECT QC",
+            "status_kind": "project_only",
+        }
+    return {
+        "score": None,
+        "status_text": "---",
+        "status_kind": "none",
+    }
+
+
+def _build_dashboard_route(
+    *,
+    file_id: int,
+    file_name: str,
+    lats: list[float],
+    lons: list[float],
+    score: float = 0.0,
+    grade: str = "--",
+    status: str = "N/A",
+    sampled_preview: bool = False,
+) -> LineRoute:
+    name = file_name
+    route_status = status
+    if sampled_preview:
+        name = f"{file_name} (Sampled preview)"
+        if status == "N/A":
+            route_status = "PREVIEW"
+    return LineRoute(
+        line_id=file_id,
+        name=name,
+        lats=[float(v) for v in lats],
+        lons=[float(v) for v in lons],
+        score=score,
+        grade=grade,
+        status=route_status,
+    )
+
+
 def _table_qss() -> str:
     """c()-based table QSS -- theme-aware replacement for TABLE_STYLE."""
     return f"""
@@ -75,7 +134,7 @@ def _btn_primary_qss(bg: str | None = None, bg_hover: str | None = None) -> str:
     return f"""
         QPushButton {{
             background: {_bg};
-            color: #ffffff;
+            color: {c().TEXT_BRIGHT};
             border: none;
             border-radius: {Radius.BASE}px;
             font-size: {Font.SM}px;
@@ -85,7 +144,7 @@ def _btn_primary_qss(bg: str | None = None, bg_hover: str | None = None) -> str:
         QPushButton:hover {{ background: {_hover}; }}
         QPushButton:disabled {{
             background: {c().SLATE};
-            color: {c().DIM};
+            color: {c().MUTED};
         }}
     """
 
@@ -260,6 +319,8 @@ class ProjectDetailPanel(QWidget):
 
         self._dash_track = TrackPlot(show_legend=False, show_toolbar=True, show_hint=True)
         self._dash_track.line_selected.connect(self._on_dash_track_line_selected)
+        self._dash_track.line_activated.connect(self._on_dash_track_line_activated)
+        self._dash_track.set_hint_text("Click a line to select it. Double-click to open its analysis.")
         track_splitter.addWidget(self._dash_track)
 
         self._dash_line_list = QListWidget()
@@ -559,26 +620,20 @@ class ProjectDetailPanel(QWidget):
             self._table.setItem(i, 2, QTableWidgetItem(f.get("format", "").upper()))
             self._table.setItem(i, 3, QTableWidgetItem(format_number(f.get("size_mb", 0), 1)))
 
-            r = result_map.get(f["id"])
-            project_snapshot = False
-            if not r and latest_result and latest_result.get("status") == "done":
-                r = latest_result
-                project_snapshot = True
-            if r and r["status"] == "done":
-                score = r.get("score", 0)
-                self._table.setItem(i, 4, QTableWidgetItem(format_number(score, 1)))
-                status_text = "PROJECT QC" if project_snapshot else f"{STATUS_ICONS.get('DONE', '')} DONE"
-                status_item = QTableWidgetItem(status_text)
-                status_item.setForeground(QColor(c().CYAN) if project_snapshot else QColor(c().GREEN))
-                self._table.setItem(i, 5, status_item)
-            elif r and r["status"] == "running":
-                self._table.setItem(i, 4, QTableWidgetItem("---"))
-                status_item = QTableWidgetItem(f"{STATUS_ICONS.get('RUNNING', '')} RUNNING")
-                status_item.setForeground(QColor(c().CYAN))
-                self._table.setItem(i, 5, status_item)
-            else:
-                self._table.setItem(i, 4, QTableWidgetItem("---"))
-                self._table.setItem(i, 5, QTableWidgetItem("---"))
+            row_display = _resolve_file_result_display(f["id"], result_map, latest_result)
+            score_value = row_display.get("score")
+            self._table.setItem(i, 4, QTableWidgetItem(
+                format_number(score_value, 1) if score_value is not None else "---"
+            ))
+            status_item = QTableWidgetItem(row_display["status_text"])
+            color_map = {
+                "done": QColor(c().GREEN),
+                "running": QColor(c().CYAN),
+                "project_only": QColor(c().CYAN),
+                "none": QColor(c().MUTED),
+            }
+            status_item.setForeground(color_map.get(row_display["status_kind"], QColor(c().TEXT)))
+            self._table.setItem(i, 5, status_item)
 
 
         self._apply_table_filters()
@@ -619,6 +674,7 @@ class ProjectDetailPanel(QWidget):
             score = 0.0
             has_result = bool(r)
 
+            sampled_preview = False
             if has_result:
                 score = float(r.get("score", 0) or 0)
                 try:
@@ -638,6 +694,7 @@ class ProjectDetailPanel(QWidget):
                 coords = self._quick_mbes_coords(f)
                 if coords:
                     lats, lons = coords
+                    sampled_preview = True
 
             if len(lats) < 2 or len(lons) < 2:
                 continue
@@ -649,14 +706,15 @@ class ProjectDetailPanel(QWidget):
                 grade = "--"
                 status = "N/A"
 
-            routes.append(LineRoute(
-                line_id=file_id,
-                name=f.get("filename", f"File {file_id}"),
-                lats=[float(v) for v in lats],
-                lons=[float(v) for v in lons],
+            routes.append(_build_dashboard_route(
+                file_id=file_id,
+                file_name=f.get("filename", f"File {file_id}"),
+                lats=lats,
+                lons=lons,
                 score=score,
                 grade=grade,
                 status=status,
+                sampled_preview=sampled_preview,
             ))
         self._dash_track_routes = routes
         self._dash_track.set_routes(routes)
@@ -699,7 +757,9 @@ class ProjectDetailPanel(QWidget):
         self._dash_line_list.blockSignals(True)
         self._dash_line_list.clear()
         for route in routes:
-            if route.grade == "--":
+            if route.status == "PREVIEW":
+                text = f"[PREVIEW] {route.name}"
+            elif route.grade == "--":
                 text = f"[--] {route.name}"
             else:
                 text = f"[{route.score:.0f}] {route.name}"
@@ -736,6 +796,7 @@ class ProjectDetailPanel(QWidget):
     def _on_dash_track_line_selected(self, line_id):
         """TrackPlot click -> highlight line list item."""
         self._dash_line_list.blockSignals(True)
+        self._dash_line_list.clearSelection()
         for i in range(self._dash_line_list.count()):
             item = self._dash_line_list.item(i)
             if item.data(Qt.ItemDataRole.UserRole) == line_id:
@@ -743,9 +804,15 @@ class ProjectDetailPanel(QWidget):
                 break
         self._dash_line_list.blockSignals(False)
 
+    def _on_dash_track_line_activated(self, line_id):
+        """TrackPlot double-click -> navigate to analysis view."""
+        if line_id is not None and self._project_id:
+            self.file_selected.emit(int(line_id), self._project_id)
+
     def _on_dash_line_list_clicked(self, row: int):
         """Line list click -> highlight TrackPlot line."""
         if row < 0:
+            self._dash_track.clear_selection()
             return
         item = self._dash_line_list.item(row)
         if not item:

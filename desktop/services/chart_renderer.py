@@ -40,8 +40,8 @@ def _style():
         "axes.edgecolor": t.SLATE,
         "axes.labelcolor": t.MUTED,
         "text.color": t.TEXT,
-        "xtick.color": t.DIM,
-        "ytick.color": t.DIM,
+        "xtick.color": t.MUTED,
+        "ytick.color": t.MUTED,
         "grid.color": t.SLATE,
         "grid.alpha": 0.6,
         "font.family": "Pretendard",
@@ -207,7 +207,7 @@ def render_motion_timeseries(
             # Stats annotation
             stats = f"\u03bc={np.nanmean(arr):.3f}  \u03c3={np.nanstd(arr):.3f}  range={np.nanmin(arr):.3f}~{np.nanmax(arr):.3f}"
             ax.text(0.99, 0.95, stats, transform=ax.transAxes,
-                    fontsize=7, ha="right", va="top", color=_t().DIM)
+                    fontsize=7, ha="right", va="top", color=_t().MUTED)
 
         axes[0].set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT)
         axes[-1].set_xlabel("Time (s)")
@@ -313,7 +313,7 @@ def render_attitude_spectrum(heave: np.ndarray, sample_rate: float = 50.0,
         if n < 32:
             ax.text(0.5, 0.5, "Insufficient data for spectrum",
                     transform=ax.transAxes, ha="center", va="center",
-                    fontsize=12, color=_t().DIM)
+                    fontsize=12, color=_t().MUTED)
             return _fig_to_png(fig)
 
         # Detrend
@@ -367,7 +367,7 @@ def render_qc_radar(scores: dict[str, float],
         n = len(labels)
 
         if n == 0:
-            ax.text(0, 0, "No data", ha="center", fontsize=14, color=_t().DIM)
+            ax.text(0, 0, "No data", ha="center", fontsize=14, color=_t().MUTED)
             return _fig_to_png(fig)
 
         # Close the polygon
@@ -389,7 +389,7 @@ def render_qc_radar(scores: dict[str, float],
         ax.set_xticklabels(labels, fontsize=9, color=_t().TEXT)
         ax.set_ylim(0, 100)
         ax.set_yticks([25, 50, 75, 100])
-        ax.set_yticklabels(["25", "50", "75", "100"], fontsize=7, color=_t().DIM)
+        ax.set_yticklabels(["25", "50", "75", "100"], fontsize=7, color=_t().MUTED)
 
         ax.set_title(title, fontsize=12, fontweight=600, color=_t().TEXT_BRIGHT, pad=20)
 

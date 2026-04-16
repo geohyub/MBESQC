@@ -22,6 +22,8 @@ from geoview_pyside6.widgets import KPICard
 from geoview_pyside6.effects import reveal_widget, stagger_reveal
 
 from desktop.services.data_service import DataService
+from desktop.widgets.sparkline_widget import HeatmapCell, SparklineWidget
+from desktop.widgets.project_tile import ProjectTile
 
 
 def _table_qss() -> str:
@@ -63,7 +65,7 @@ def _btn_primary_qss() -> str:
     return f"""
         QPushButton {{
             background: {c().CYAN};
-            color: #ffffff;
+            color: {c().TEXT_BRIGHT};
             border: none;
             border-radius: {Radius.BASE}px;
             font-size: {Font.SM}px;
@@ -73,7 +75,7 @@ def _btn_primary_qss() -> str:
         QPushButton:hover {{ background: {c().CYAN_H}; }}
         QPushButton:disabled {{
             background: {c().SLATE};
-            color: {c().DIM};
+            color: {c().MUTED};
         }}
     """
 
@@ -164,7 +166,7 @@ class _ActivityItem(QFrame):
         ts = QLabel(time_str)
         ts.setStyleSheet(f"""
             font-size: {Font.XS}px;
-            color: {c().DIM};
+            color: {c().MUTED};
             background: transparent;
         """)
         layout.addWidget(ts)
@@ -198,8 +200,19 @@ class DashboardPanel(QWidget):
         self._kpi_analyzed = KPICard("", "0", "분석 완료")
         self._kpi_score = KPICard("", "---", "평균 점수")
 
-        for kpi in (self._kpi_projects, self._kpi_files,
-                    self._kpi_analyzed, self._kpi_score):
+        # KPI 스파크라인 (각 카드 하단)
+        self._sparklines: dict[str, SparklineWidget] = {}
+        for key, kpi, color in [
+            ("projects", self._kpi_projects, c().BLUE),
+            ("files", self._kpi_files, c().CYAN),
+            ("analyzed", self._kpi_analyzed, c().GREEN),
+            ("score", self._kpi_score, c().CYAN),
+        ]:
+            spark = SparklineWidget(color=color)
+            self._sparklines[key] = spark
+            # KPICard 내부 레이아웃에 스파크라인 추가
+            if kpi.layout():
+                kpi.layout().addWidget(spark)
             kpi_row.addWidget(kpi)
 
         layout.addLayout(kpi_row)
@@ -210,12 +223,45 @@ class DashboardPanel(QWidget):
         header_row.addWidget(self._section_title)
         header_row.addStretch()
 
+        # View toggle: table / tile
+        self._view_table_btn = QPushButton("☰")
+        self._view_table_btn.setFixedSize(28, 28)
+        self._view_table_btn.setToolTip("테이블 뷰")
+        self._view_table_btn.setCursor(Qt.PointingHandCursor)
+        self._view_table_btn.clicked.connect(lambda: self._set_view("table"))
+        header_row.addWidget(self._view_table_btn)
+
+        self._view_tile_btn = QPushButton("▦")
+        self._view_tile_btn.setFixedSize(28, 28)
+        self._view_tile_btn.setToolTip("히트맵 뷰")
+        self._view_tile_btn.setCursor(Qt.PointingHandCursor)
+        self._view_tile_btn.clicked.connect(lambda: self._set_view("tile"))
+        header_row.addWidget(self._view_tile_btn)
+
         self._new_btn = QPushButton("+ 새 프로젝트")
         self._new_btn.setCursor(Qt.PointingHandCursor)
         self._new_btn.setStyleSheet(_btn_primary_qss())
         self._new_btn.clicked.connect(self.new_project.emit)
         header_row.addWidget(self._new_btn)
         layout.addLayout(header_row)
+
+        # Tile grid (히트맵 뷰)
+        self._tile_scroll = QScrollArea()
+        self._tile_scroll.setWidgetResizable(True)
+        self._tile_scroll.setFrameShape(QFrame.NoFrame)
+        self._tile_scroll.setStyleSheet(f"""
+            QScrollArea {{ background: transparent; border: none; }}
+            {_slim_scrollbar_qss()}
+        """)
+        self._tile_container = QWidget()
+        self._tile_layout = QVBoxLayout(self._tile_container)
+        self._tile_layout.setContentsMargins(0, 0, 0, 0)
+        self._tile_layout.setSpacing(Space.SM)
+        self._tile_scroll.setWidget(self._tile_container)
+        self._tile_scroll.setVisible(False)
+        layout.addWidget(self._tile_scroll)
+
+        self._view_mode = "table"  # "table" | "tile"
 
         # Project table
         self._table = QTableWidget()
@@ -318,6 +364,17 @@ class DashboardPanel(QWidget):
         projects = DataService.list_projects()
         self._update_activity_feed(projects)
 
+    def _set_view(self, mode: str) -> None:
+        """Toggle between table and tile view."""
+        self._view_mode = mode
+        self._table.setVisible(mode == "table")
+        self._tile_scroll.setVisible(mode == "tile")
+        # Toggle button styles
+        active_qss = f"background: {c().CYAN}; color: {c().BG}; border: none; border-radius: 4px; font-size: 14px;"
+        inactive_qss = f"background: {c().SLATE}; color: {c().MUTED}; border: none; border-radius: 4px; font-size: 14px;"
+        self._view_table_btn.setStyleSheet(active_qss if mode == "table" else inactive_qss)
+        self._view_tile_btn.setStyleSheet(active_qss if mode == "tile" else inactive_qss)
+
     def _on_double_click(self, index):
         row = index.row()
         if row < 0 or row >= len(self._project_ids):
@@ -354,8 +411,73 @@ class DashboardPanel(QWidget):
             date_str = p["created_at"][:10] if p.get("created_at") else ""
             self._table.setItem(i, 4, QTableWidgetItem(date_str))
 
+        # Update tile grid
+        self._update_tile_grid(projects)
+
+        # Update KPI sparklines (최근 7개 프로젝트 점수 트렌드)
+        recent_scores = []
+        for p in projects[:7]:
+            results = DataService.get_project_qc_results(p["id"])
+            done_results = [r for r in results if r.get("status") == "done"]
+            if done_results:
+                avg = sum(r.get("score", 0) for r in done_results) / len(done_results)
+                recent_scores.append(avg)
+        if len(recent_scores) >= 2:
+            self._sparklines["score"].set_values(recent_scores)
+
         # Update activity feed
         self._update_activity_feed(projects)
+
+        # Apply view mode
+        self._set_view(self._view_mode)
+
+    def _update_tile_grid(self, projects: list[dict]) -> None:
+        """Populate tile grid from project data."""
+        # Clear existing tiles
+        while self._tile_layout.count():
+            item = self._tile_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        for p in projects:
+            pid = p["id"]
+            files = DataService.get_project_files(pid)
+            results = DataService.get_project_qc_results(pid)
+            done_results = [r for r in results if r.get("status") == "done"]
+
+            score = 0.0
+            grade = "---"
+            module_scores: dict[str, str] = {}
+
+            if done_results:
+                latest = done_results[-1]
+                score = latest.get("score", 0)
+                grade_map = {90: "A", 80: "B", 70: "C", 60: "D"}
+                grade = "F"
+                for threshold, g in sorted(grade_map.items(), reverse=True):
+                    if score >= threshold:
+                        grade = g
+                        break
+                # Extract per-module status from latest result
+                modules = latest.get("modules", {})
+                for mod_key in HeatmapCell.MODULE_ORDER:
+                    mod_data = modules.get(mod_key, {})
+                    mod_status = mod_data.get("status", "pending")
+                    module_scores[mod_key] = mod_status
+
+            tile = ProjectTile(
+                project_id=pid,
+                name=p.get("name", "Unknown"),
+                vessel=p.get("vessel", ""),
+                score=score,
+                grade=grade,
+                file_count=len(files),
+                module_scores=module_scores,
+            )
+            tile.clicked.connect(self.project_selected.emit)
+            self._tile_layout.addWidget(tile)
+
+        self._tile_layout.addStretch()
 
     def _update_activity_feed(self, projects: list[dict]):
         """Populate activity feed with recent QC results and project events."""

@@ -32,6 +32,7 @@ from geoview_pyside6.help import set_help
 from desktop.app_controller import AppController
 from desktop.widgets.toast import ToastManager
 from desktop.services.data_service import DataService
+from desktop.services.om_client import OMClient, resolve_runtime_config
 from desktop.i18n import install as install_i18n
 from desktop.panels.dashboard_panel import DashboardPanel
 from desktop.panels.project_detail_panel import ProjectDetailPanel
@@ -39,6 +40,7 @@ from desktop.panels.upload_panel import UploadPanel
 from desktop.panels.analysis_panel import AnalysisPanel
 from desktop.panels.project_form_panel import ProjectFormPanel
 from desktop.panels.dqr_panel import DQRPanel
+from desktop.services.analysis_service import QC_WEIGHTS
 from desktop.services.export_service import ExportWorker
 
 
@@ -324,6 +326,21 @@ class MBESQCApp(GeoViewApp):
         QShortcut(QKeySequence("Ctrl+S"), self, self._on_shortcut_save_chart)
         QShortcut(QKeySequence("Ctrl+R"), self, self._on_shortcut_reanalyze)
 
+        # 1-9: Direct module access in analysis panel
+        module_keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+        module_ids = list(QC_WEIGHTS.keys())  # 9 modules in order
+        for key, mod_id in zip(module_keys, module_ids):
+            QShortcut(
+                QKeySequence(key), self,
+                lambda mid=mod_id: self._on_module_shortcut(mid),
+            )
+
+    def _on_module_shortcut(self, module_id: str):
+        """1-9 키로 분석 패널 모듈 직접 접근."""
+        panel = self.content_stack.currentWidget()
+        if panel == self._analysis:
+            self._analysis._on_card_clicked(module_id)
+
     def _on_refresh(self):
         """Refresh current panel."""
         panel = self.content_stack.currentWidget()
@@ -460,7 +477,20 @@ class MBESQCApp(GeoViewApp):
             self._switch_panel(self._current_panel)
 
 
-def main():
+def main(
+    *,
+    om_base_url: str | None = None,
+    om_timeout_seconds: float | int | None = None,
+):
+    """Start MBESQC with a pinned OffsetManager runtime configuration."""
+    resolved = resolve_runtime_config(
+        om_base_url=om_base_url,
+        om_timeout_seconds=om_timeout_seconds,
+    )
+    OMClient.configure(
+        base_url=resolved.base_url,
+        timeout=resolved.timeout_seconds,
+    )
     MBESQCApp.run()
 
 

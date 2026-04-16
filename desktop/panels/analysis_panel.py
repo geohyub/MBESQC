@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import html
 import json
 import os
@@ -39,6 +40,8 @@ from desktop.widgets.score_ring import ScoreRing
 from desktop.widgets.mbes_chart import MBESChartWidget
 from desktop.widgets.crossline_map import CrosslineMap
 from geoview_pyside6.widgets.track_plot import TrackPlot, LineRoute
+
+logger = logging.getLogger(__name__)
 
 
 def _table_qss() -> str:
@@ -80,7 +83,7 @@ def _btn_primary_qss() -> str:
     return f"""
         QPushButton {{
             background: {c().CYAN};
-            color: #ffffff;
+            color: {c().TEXT_BRIGHT};
             border: none;
             border-radius: {Radius.BASE}px;
             font-size: {Font.SM}px;
@@ -90,7 +93,7 @@ def _btn_primary_qss() -> str:
         QPushButton:hover {{ background: {c().CYAN_H}; }}
         QPushButton:disabled {{
             background: {c().SLATE};
-            color: {c().DIM};
+            color: {c().MUTED};
         }}
     """
 
@@ -441,6 +444,8 @@ class AnalysisPanel(QWidget):
         self._chart_pixmap = None
         self._active_qc_id = None
         self._current_detail_items = []
+        self._selected_coverage_line: str | None = None
+        self._coverage_line_names: list[str] = []
         self._revealed_once = False
         self._build_ui()
 
@@ -962,6 +967,7 @@ class AnalysisPanel(QWidget):
         self._line_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._line_table.setMaximumHeight(200)
         self._line_table.setStyleSheet(_table_qss())
+        self._line_table.itemSelectionChanged.connect(self._on_line_table_selection_changed)
 
         # Interactive chart widget
         self._chart = MBESChartWidget()
@@ -976,6 +982,7 @@ class AnalysisPanel(QWidget):
         self._track_plot.setMaximumHeight(420)
         self._track_plot.setVisible(False)
         self._track_plot.line_selected.connect(self._on_track_line_clicked)
+        self._track_plot.set_hint_text("Click a line to focus it in Coverage QC.")
 
         # 3D Bathymetry Map
         from desktop.widgets.bathymetry_3d import Bathymetry3D
@@ -990,19 +997,20 @@ class AnalysisPanel(QWidget):
         #   2. Progress bar         (already added above)
         #   3. QC cards grid        (already added above)
         #   4. Module detail table
-        #   5. Line filter + per-line table
-        #   6. Chart area
-        #   6b. Crossline intersection map
-        #   6c. Track Plot (survey route map)
-        #   7. Insight frames (overview, spotlight, history, diff, story, settings)
+        #   5. Track Plot (survey route map / line selection)
+        #   6. Line filter + per-line table
+        #   7. Chart area
+        #   7b. Crossline intersection map
+        #   7c. 3D bathymetry
+        #   8. Insight frames (overview, spotlight, history, diff, story, settings)
         # ────────────────────────────────────────────
         layout.addWidget(self._detail_frame)
+        layout.addWidget(self._track_plot)
         layout.addWidget(self._line_filter_frame)
         layout.addWidget(self._line_table)
         layout.addWidget(self._chart)
         layout.addWidget(self._crossline_map)
         layout.addWidget(self._bathy_3d)
-        layout.addWidget(self._track_plot)
         layout.addWidget(self._overview_frame)
         layout.addWidget(self._spotlight_frame)
         layout.addWidget(self._history_frame)
@@ -1410,8 +1418,8 @@ class AnalysisPanel(QWidget):
         self._focus_detail_item(focus_name)
 
         # ── Line table / filter visibility ──
-        show_lines = qc_id == "coverage" and section.get("lines")
-        show_motion_toggle = qc_id == "motion" and section.get("per_line")
+        show_lines = qc_id == "coverage" and bool(section.get("lines"))
+        show_motion_toggle = qc_id == "motion" and bool(section.get("per_line"))
         self._line_table.setVisible(show_lines)
         self._line_filter_frame.setVisible(show_lines or show_motion_toggle)
         self._motion_toggle.setVisible(show_motion_toggle)
@@ -1419,11 +1427,14 @@ class AnalysisPanel(QWidget):
 
         if show_lines:
             self._populate_line_table(section["lines"])
+        else:
+            self._selected_coverage_line = None
+            self._coverage_line_names = []
         if not show_motion_toggle:
             self._motion_toggle.setChecked(False)
 
         # ── Crossline map visibility ──
-        show_crossline_map = (
+        show_crossline_map = bool(
             qc_id == "crossline"
             and section.get("cell_eastings")
             and len(section.get("cell_eastings", [])) > 0
@@ -1435,19 +1446,23 @@ class AnalysisPanel(QWidget):
             self._crossline_map.setVisible(False)
 
         # ── Track plot visibility (show for coverage module) ──
-        show_track = qc_id == "coverage" and section.get("lines")
+        show_track = qc_id == "coverage" and bool(self._build_track_routes(section))
         self._track_plot.setVisible(show_track)
         if show_track:
             self._populate_track_plot(section)
+            self._sync_coverage_selection(self._selected_coverage_line)
+        else:
+            self._track_plot.set_routes([])
+            self._track_plot.clear_selection()
 
         # ── 3D Bathymetry map (show for coverage module) ──
-        show_bathy = qc_id == "coverage" and section.get("lines")
+        show_bathy = qc_id == "coverage" and bool(section.get("lines"))
         self._bathy_3d.setVisible(show_bathy)
         if show_bathy:
             try:
                 self._bathy_3d.set_data_from_result(self._result_data)
             except Exception as e:
-                print(f"[AnalysisPanel] 3D bathy error: {e}")
+                logger.exception("3D bathy error")
                 self._bathy_3d.setVisible(False)
 
         if not section:
@@ -1560,9 +1575,11 @@ class AnalysisPanel(QWidget):
         self._line_filter.blockSignals(True)
         self._line_filter.clear()
         self._line_filter.addItem("전체 라인")
+        self._coverage_line_names = []
         self._line_table.setRowCount(len(lines))
         for i, ln in enumerate(lines):
             name = ln.get("name", f"Line {i+1}")
+            self._coverage_line_names.append(name)
             self._line_filter.addItem(name)
             self._line_table.setItem(i, 0, QTableWidgetItem(name))
             self._line_table.setItem(i, 1, QTableWidgetItem(format_number(ln.get("heading_deg", 0), 1)))
@@ -1572,27 +1589,31 @@ class AnalysisPanel(QWidget):
             self._line_table.setItem(i, 5, QTableWidgetItem(format_number(ln.get("num_pings", 0), 0)))
         self._line_filter.blockSignals(False)
 
-    def _populate_track_plot(self, section: dict):
-        """Build LineRoute objects from coverage data and feed to TrackPlot."""
-        lines = section.get("lines", [])
-        # Also check overall coverage lats/lons
+    def _build_track_routes(self, section: dict) -> list[LineRoute]:
+        """Build LineRoute objects from the serialized coverage payload."""
         routes: list[LineRoute] = []
-        for i, ln in enumerate(lines):
-            lats = ln.get("lats", [])
-            lons = ln.get("lons", [])
-            if len(lats) < 2 or len(lons) < 2:
-                continue
-            name = ln.get("name", f"Line {i + 1}")
-            routes.append(LineRoute(
-                line_id=name,
-                name=name,
-                lats=lats,
-                lons=lons,
-                score=0.0,
-                grade="--",
-                status="N/A",
-            ))
-        # If no per-line routes, try overall coverage track
+
+        def append_routes(lines: list[dict]):
+            for ln in lines:
+                lats = ln.get("lats") or ln.get("track_lats") or []
+                lons = ln.get("lons") or ln.get("track_lons") or []
+                if len(lats) < 2 or len(lons) < 2:
+                    continue
+                name = str(ln.get("name") or ln.get("filename") or f"Line {len(routes) + 1}")
+                routes.append(LineRoute(
+                    line_id=name,
+                    name=name,
+                    lats=lats,
+                    lons=lons,
+                    score=0.0,
+                    grade="--",
+                    status="N/A",
+                ))
+
+        append_routes(section.get("track_lines", []))
+        if not routes:
+            append_routes(section.get("lines", []))
+
         if not routes:
             cov = section.get("coverage", section)
             ovr_lats = cov.get("track_lats", [])
@@ -1607,30 +1628,73 @@ class AnalysisPanel(QWidget):
                     grade="--",
                     status="N/A",
                 ))
-        self._track_plot.set_routes(routes)
+
+        return routes
+
+    def _populate_track_plot(self, section: dict):
+        """Build LineRoute objects from coverage data and feed to TrackPlot."""
+        self._track_plot.set_routes(self._build_track_routes(section))
 
     def _on_track_line_clicked(self, line_id):
-        """Highlight the selected line in coverage chart."""
-        if isinstance(line_id, str) and line_id != "overall":
-            # Set the line filter combo to the clicked line name
-            idx = self._line_filter.findText(line_id)
-            if idx >= 0:
-                self._line_filter.setCurrentIndex(idx)
+        """Highlight the selected line in coverage chart and table."""
+        if isinstance(line_id, str):
+            self._sync_coverage_selection(line_id if line_id != "overall" else None)
 
     def _on_line_filter_changed(self, idx: int):
         """Re-render coverage chart with selected line highlight."""
-        section = self._result_data.get("coverage", {})
-        if not section:
-            return
         selected = self._line_filter.currentText()
         sel = None if selected in ("전체 라인", "") else selected
-        try:
-            self._chart.render_coverage(section, selected_line=sel)
-        except Exception:
-            pass
-        # Also highlight in track plot
-        if hasattr(self, '_track_plot') and sel:
-            self._track_plot.select_line(sel)
+        self._sync_coverage_selection(sel)
+
+    def _on_line_table_selection_changed(self):
+        """Keep table clicks in sync with combo, chart, and TrackPlot."""
+        selected_items = self._line_table.selectedItems()
+        if not selected_items:
+            return
+        row = self._line_table.currentRow()
+        if row < 0:
+            return
+        item = self._line_table.item(row, 0)
+        if item is None:
+            return
+        self._sync_coverage_selection(item.text())
+
+    def _sync_coverage_selection(self, line_id: str | None):
+        """Apply one shared coverage-line selection across combo, table, chart, and track plot."""
+        if line_id not in set(self._coverage_line_names):
+            line_id = None
+
+        self._selected_coverage_line = line_id
+
+        combo_target = 0 if line_id is None else self._line_filter.findText(line_id)
+        if combo_target < 0:
+            combo_target = 0
+        self._line_filter.blockSignals(True)
+        self._line_filter.setCurrentIndex(combo_target)
+        self._line_filter.blockSignals(False)
+
+        self._line_table.blockSignals(True)
+        self._line_table.clearSelection()
+        if line_id is not None:
+            for row in range(self._line_table.rowCount()):
+                item = self._line_table.item(row, 0)
+                if item and item.text() == line_id:
+                    self._line_table.setCurrentCell(row, 0)
+                    self._line_table.selectRow(row)
+                    break
+        self._line_table.blockSignals(False)
+
+        if line_id is None:
+            self._track_plot.clear_selection()
+        else:
+            self._track_plot.select_line(line_id)
+
+        section = self._result_data.get("coverage", {})
+        if section:
+            try:
+                self._chart.render_coverage(section, selected_line=line_id)
+            except Exception:
+                pass
 
     def _on_motion_toggle(self, checked: bool):
         """Toggle between overall and per-line motion chart."""

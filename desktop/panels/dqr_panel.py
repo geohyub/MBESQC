@@ -37,7 +37,7 @@ def _btn_primary_qss() -> str:
     return f"""
         QPushButton {{
             background: {c().CYAN};
-            color: #ffffff;
+            color: {c().TEXT_BRIGHT};
             border: none;
             border-radius: {Radius.BASE}px;
             font-size: {Font.SM}px;
@@ -47,7 +47,7 @@ def _btn_primary_qss() -> str:
         QPushButton:hover {{ background: {c().CYAN_H}; }}
         QPushButton:disabled {{
             background: {c().SLATE};
-            color: {c().DIM};
+            color: {c().MUTED};
         }}
     """
 
@@ -1014,6 +1014,7 @@ class _GUIOnlyTab(QWidget):
 class DQRPanel(QWidget):
     """Daily QC Report panel with 3 tabs."""
 
+    panel_title = "DQR"
     toast_requested = Signal(str, str)
 
     def __init__(self, parent=None):

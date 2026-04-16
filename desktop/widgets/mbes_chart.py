@@ -55,7 +55,7 @@ def _GRID():     return _t().SLATE
 def _GRID_SUB(): return _t().BORDER
 def _BORDER():   return _t().BORDER_H
 def _TEXT():     return _t().MUTED
-def _TEXT_DIM(): return _t().DIM
+def _TEXT_DIM(): return _t().MUTED
 def _BRIGHT():   return _t().TEXT_BRIGHT
 _WHITE    = "#FFFFFF"
 
