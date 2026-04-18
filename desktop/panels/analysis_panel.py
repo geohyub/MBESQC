@@ -36,10 +36,18 @@ from desktop.services.insight_service import (
     format_number,
     pick_focus_module,
 )
-from desktop.widgets.score_ring import ScoreRing
-from desktop.widgets.mbes_chart import MBESChartWidget
-from desktop.widgets.crossline_map import CrosslineMap
-from geoview_pyside6.widgets.track_plot import TrackPlot, LineRoute
+# BL-034 lazy-load: heavy widgets (matplotlib / pyqtgraph) are
+# imported inside __init__ so app startup doesn't pay the cost
+# until the analysis panel is actually shown.
+#
+# `from __future__ import annotations` (line 3) already defers
+# type-hint evaluation, so references like `self._chart:
+# MBESChartWidget` remain valid strings.
+if False:  # typing-only — lets IDEs follow the names
+    from desktop.widgets.score_ring import ScoreRing
+    from desktop.widgets.mbes_chart import MBESChartWidget
+    from desktop.widgets.crossline_map import CrosslineMap
+    from geoview_pyside6.widgets.track_plot import TrackPlot, LineRoute
 
 logger = logging.getLogger(__name__)
 
@@ -453,6 +461,13 @@ class AnalysisPanel(QWidget):
         return self._project_id
 
     def _build_ui(self):
+        # BL-034 lazy-load: pulls in matplotlib + pyqtgraph only when
+        # the analysis panel is actually built (not at module import).
+        from desktop.widgets.score_ring import ScoreRing
+        from desktop.widgets.mbes_chart import MBESChartWidget
+        from desktop.widgets.crossline_map import CrosslineMap
+        from geoview_pyside6.widgets.track_plot import TrackPlot
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -1591,6 +1606,8 @@ class AnalysisPanel(QWidget):
 
     def _build_track_routes(self, section: dict) -> list[LineRoute]:
         """Build LineRoute objects from the serialized coverage payload."""
+        # BL-034 lazy-load
+        from geoview_pyside6.widgets.track_plot import LineRoute
         routes: list[LineRoute] = []
 
         def append_routes(lines: list[dict]):
