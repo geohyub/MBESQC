@@ -229,11 +229,27 @@ class MBESChartWidget(QFrame):
         """)
         self._layout.addWidget(self._title)
 
-        # Canvas
-        self._fig = Figure(figsize=(11, 5.5), dpi=110, facecolor=_BG())
-        self._canvas = _InteractiveCanvas(self._fig, self)
-        self._canvas.setStyleSheet(f"background: {_BG()};")
-        self._layout.addWidget(self._canvas, 1)
+        # BL-038 lazy canvas: Figure() + _InteractiveCanvas() are ~1.2 s
+        # of matplotlib backend init (Agg cache + font scan + first-draw).
+        # Skip it during startup — a placeholder sits in the layout and
+        # _ensure_canvas() swaps the real canvas in when any plot method
+        # is first called. QTimer.singleShot(0) warms the canvas in the
+        # background after the first event-loop tick, so by the time
+        # users navigate to the analysis tab the canvas is typically
+        # ready.
+        self._fig = None
+        self._canvas = None
+        self._canvas_init_scheduled = False
+        self._placeholder = QLabel("Loading chart…")
+        self._placeholder.setAlignment(Qt.AlignCenter)
+        self._placeholder.setStyleSheet(
+            f"color: {_TEXT_DIM()}; padding: 60px; background: {_BG()};"
+        )
+        self._layout.addWidget(self._placeholder, 1)
+        # Canvas is built lazily in:
+        #   1. showEvent() — when widget first becomes visible
+        #   2. any render_*() / _save_*() call that needs it
+        # Both paths call _ensure_canvas() which is idempotent.
 
         # Bottom bar: toolbar buttons + coordinate display
         bottom = QHBoxLayout()
@@ -274,14 +290,47 @@ class MBESChartWidget(QFrame):
             background: transparent;
             font-family: monospace;
         """)
-        self._canvas.coord_changed.connect(
-            lambda t: self._coord_label.setText(t if t else "Scroll: zoom | Right-drag: pan"))
+        # BL-038 lazy canvas: coord_changed is wired in _ensure_canvas()
+        # once the canvas actually exists.
         bottom.addWidget(self._coord_label)
 
         self._layout.addLayout(bottom)
 
         # Store original limits for home reset
         self._home_limits = {}
+
+    def showEvent(self, event):  # noqa: N802 — Qt override
+        # BL-038: build canvas the first time the widget becomes visible.
+        # Deferred — startups that never open this panel skip the cost.
+        super().showEvent(event)
+        if self._canvas is None and not self._canvas_init_scheduled:
+            self._canvas_init_scheduled = True
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self._ensure_canvas)
+
+    def _ensure_canvas(self):
+        """BL-038 lazy canvas: build Figure/Canvas on first use.
+
+        Returns True if the canvas was (or is now) ready. Safe to call
+        repeatedly — the second call is a ~5 ns dict lookup."""
+        if self._canvas is not None:
+            return True
+        # Swap placeholder for the real canvas.
+        self._fig = Figure(figsize=(11, 5.5), dpi=110, facecolor=_BG())
+        self._canvas = _InteractiveCanvas(self._fig, self)
+        self._canvas.setStyleSheet(f"background: {_BG()};")
+        self._canvas.coord_changed.connect(
+            lambda t: self._coord_label.setText(
+                t if t else "Scroll: zoom | Right-drag: pan"
+            )
+        )
+        # Replace placeholder in layout slot 1 (after title, before bottom bar).
+        if self._placeholder is not None:
+            self._layout.removeWidget(self._placeholder)
+            self._placeholder.deleteLater()
+            self._placeholder = None
+        self._layout.insertWidget(1, self._canvas, 1)
+        return True
 
     def _apply_frame_style(self):
         self.setStyleSheet(f"""
@@ -295,6 +344,8 @@ class MBESChartWidget(QFrame):
     def refresh_theme(self):
         """Update all visual theme colors without reloading chart data."""
         self._apply_frame_style()
+        if self._canvas is None:  # BL-038: canvas not built yet — nothing to repaint
+            return
         self._fig.patch.set_facecolor(_BG())
         self._canvas.setStyleSheet(f"background: {_BG()};")
         self._title.setStyleSheet(f"""
@@ -318,11 +369,15 @@ class MBESChartWidget(QFrame):
     def _save_home(self):
         """Save current axes limits as home."""
         self._home_limits = {}
+        if self._fig is None:  # BL-038
+            return
         for ax in self._fig.axes:
             self._home_limits[id(ax)] = (ax.get_xlim(), ax.get_ylim())
 
     def _reset_view(self):
         """Reset to original zoom/pan."""
+        if self._fig is None:  # BL-038
+            return
         for ax in self._fig.axes:
             lims = self._home_limits.get(id(ax))
             if lims:
@@ -332,6 +387,8 @@ class MBESChartWidget(QFrame):
 
     def _save_png(self):
         """Save chart as high-DPI PNG."""
+        if self._fig is None:  # BL-038: nothing to save if never drawn
+            return
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
             self, "차트 저장", "MBESQC_Chart.png", "PNG (*.png)")
@@ -340,8 +397,10 @@ class MBESChartWidget(QFrame):
                              bbox_inches="tight", pad_inches=0.3)
 
     def clear(self):
-        self._fig.clear()
         self._title.setText("")
+        if self._fig is None:  # BL-038
+            return
+        self._fig.clear()
         self._canvas.draw()
 
     def set_title(self, text: str):
@@ -353,6 +412,7 @@ class MBESChartWidget(QFrame):
 
     def render_offset(self, data: dict):
         """Roll/Pitch bias -- horizontal bars with threshold zones."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111)
         _dark_ax(ax, "Offset QC -- Roll / Pitch Bias Estimation")
@@ -420,6 +480,7 @@ class MBESChartWidget(QFrame):
 
     def render_motion(self, data: dict):
         """Attitude statistics -- grouped bars with stats panel."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         axes_data = data.get("axes", {})
         if not axes_data:
@@ -493,6 +554,7 @@ class MBESChartWidget(QFrame):
 
     def render_svp(self, data: dict):
         """SVP QC -- clean item status display."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111)
         ax.set_facecolor(_SURFACE())
@@ -539,6 +601,7 @@ class MBESChartWidget(QFrame):
 
     def render_coverage(self, data: dict, selected_line: str | None = None):
         """Coverage map with premium tracklines. Highlight selected_line if given."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111)
         title = "Coverage QC -- Survey Tracklines"
@@ -600,6 +663,7 @@ class MBESChartWidget(QFrame):
 
     def render_crossline(self, data: dict):
         """Cross-line depth differences with IHO assessment."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111)
 
@@ -651,6 +715,7 @@ class MBESChartWidget(QFrame):
 
     def render_motion_perline(self, data: dict):
         """Per-line motion statistics: horizontal grouped bar chart."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111)
         _dark_ax(ax, "Motion QC -- Per-line Statistics")
@@ -688,6 +753,7 @@ class MBESChartWidget(QFrame):
 
     def render_radar(self, scores: dict[str, float]):
         """QC score radar with premium styling."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111, polar=True)
         ax.set_facecolor(_SURFACE())
@@ -739,6 +805,7 @@ class MBESChartWidget(QFrame):
 
     def render_file_summary(self, data: dict):
         """File QC items with status badges."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111)
         ax.set_facecolor(_SURFACE())
@@ -781,6 +848,7 @@ class MBESChartWidget(QFrame):
 
     def render_vessel(self, data: dict):
         """Vessel QC -- PDS vs HVF comparison."""
+        self._ensure_canvas()  # BL-038
         self._fig.clear()
         ax = self._fig.add_subplot(111)
         ax.set_facecolor(_SURFACE())
